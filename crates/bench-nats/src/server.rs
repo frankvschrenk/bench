@@ -113,7 +113,7 @@ impl BenchNats {
     }
 
     #[tool(
-        description = "List all subjects the bench desktop app handles over NATS, with input/output signatures. Call once at the start of a task to discover what is available."
+        description = "List all subjects the bench desktop app handles over NATS, with input/output signatures. Call once at the start of a task to discover what is available. Before working in a repo or folder, send bench.context.brief {repo} first: it returns the current handbook and active tasks for that repo."
     )]
     async fn list_operations(&self) -> Result<CallToolResult, McpError> {
         Ok(text_result(manifest_json(), false))
@@ -149,7 +149,7 @@ impl BenchNats {
     }
 
     #[tool(
-        description = "Send a NATS Request-Reply message to a bench instance. Use list_operations to discover the subject and payload shape. The active target set via set_target is used automatically. Pass 'target' to override for a single call. Blocks until bench replies (timeout: 30 s)."
+        description = "Send a NATS Request-Reply message to a bench instance. Use list_operations to discover the subject and payload shape. The active target set via set_target is used automatically. Pass 'target' to override for a single call. Blocks until bench replies (timeout: 30 s). Start work in a repo with subject bench.context.brief, payload {repo: <path>}."
     )]
     async fn send_message(
         &self,
@@ -326,7 +326,13 @@ impl ServerHandler for BenchNats {
         info.instructions = Some(
             "bench-nats bridges Claude to a running bench desktop app over NATS. \
              Call list_operations to discover the bench surface, set_target to pick \
-             an instance, and send_message to issue a request-reply."
+             an instance, and send_message to issue a request-reply.\n\
+             Project knowledge lives in oosmem, not in CLAUDE.md files. Before working in a \
+             repo or folder, and again after the conversation was summarized, call \
+             send_message bench.context.brief {repo: <path>}: it returns the repo handbook \
+             (current facts: map, build, quirks, conventions, open threads) and the active \
+             tasks with their latest notes. Keep it true: when something lasting changes, \
+             replace the entry with bench.handbook.set; log progress with bench.task.note."
                 .to_string(),
         );
         info

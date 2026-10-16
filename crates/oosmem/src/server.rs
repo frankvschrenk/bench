@@ -204,10 +204,14 @@ impl Handlers {
         let qvec = vector::build_query(&req.query, self.dim as usize);
 
         let store = self.store.lock().unwrap();
-        // Exact scan already filters by stream and ranks, so no over-fetch.
-        let hits = store.search(&qvec, k, stream);
+        // Exact scan already filters by stream and ranks; over-fetch only to
+        // make room for superseded events that are dropped below.
+        let fetch = if req.include_superseded { k } else { (k * 3).min(SEARCH_K_CAP) };
+        let hits = store.search(&qvec, fetch, stream);
         let out: Vec<SearchHit> = hits
             .into_iter()
+            .filter(|(id, _)| req.include_superseded || !store.is_superseded(*id))
+            .take(k)
             .filter_map(|(id, score)| store.by_id(id).map(|ev| SearchHit { event: to_event_json(ev), score }))
             .collect();
         json(&SearchReply { hits: out, ..Default::default() })

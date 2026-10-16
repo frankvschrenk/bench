@@ -139,6 +139,9 @@ pub struct SearchRequest {
     pub k: usize,
     /// optional stream filter; 0 means all streams.
     pub stream: u64,
+    /// also return events another event supersedes (default: hide them —
+    /// a replaced fact should not outrank its replacement)
+    pub include_superseded: bool,
 }
 
 #[derive(Debug, Serialize)]

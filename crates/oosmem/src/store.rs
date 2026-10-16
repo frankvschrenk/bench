@@ -284,6 +284,11 @@ impl Store {
     /// vectors (events with no tokenisable text) and, if `stream_id` is given,
     /// restricts to that stream. Returns (event_id, score) sorted by score
     /// descending, length <= k.
+    /// Has a later event replaced this one (ref kind supersedes)?
+    pub fn is_superseded(&self, id: u64) -> bool {
+        self.inverse_refs(id).iter().any(|r| r.kind == crate::format::RefKind::Supersedes.as_u8())
+    }
+
     pub fn search(&self, query: &[f32], k: usize, stream_id: Option<u64>) -> Vec<(u64, f32)> {
         let mut scored: Vec<(u64, f32)> = self
             .by_id

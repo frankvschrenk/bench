@@ -32,7 +32,27 @@ a new schema every time bench grows a subject:
 
 The manifest in `src/operations.rs` is the only thing Claude needs to
 read to discover the full bench surface (fs, search, exec, git, patch,
-pg, memory, task).
+pg, memory, task, handbook, context).
+
+## Project knowledge: handbook + brief
+
+Knowledge about a repo lives in oosmem, not in CLAUDE.md files. Two layers:
+
+- **Handbook** (`bench.handbook.set/get/history`): the *current* facts per
+  repo — map, build, quirks, conventions, open threads — as a few keyed
+  entries. Setting a key appends an event to oosmem stream 2 (topic
+  `<repo>|<key>`) that *supersedes* the previous one, so the newest is
+  current and the older ones are its history. Repo `*` = every repo.
+- **Tasks** (`bench.task.*`): the progress log.
+
+`bench.context.brief {repo}` returns both, compact: global + repo handbook
+and the repo's active tasks with their latest notes. The server
+`instructions` and the tool descriptions tell Claude to call it before
+working in a repo and again after a conversation was summarized — so a
+fresh session never depends on someone remembering to look.
+
+`bench.memory.write` takes `supersedes: [event ids]` for corrections;
+oosmem search hides superseded events unless `include_superseded`.
 
 ## Subject routing
 
