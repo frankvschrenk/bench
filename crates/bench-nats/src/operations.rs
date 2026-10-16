@@ -118,5 +118,6 @@ static OPERATIONS: &[Operation] = &[
     Operation { subject: "bench.task.finish", description: "Mark a task done or abandoned.", input: InputSchema(&[("task_id", "number"), ("outcome", "string"), ("status", "done|abandoned (optional, default done)")]), output: "{ task_id, status, outcome }" },
     Operation { subject: "bench.task.resume", description: "Resume the most recent active task (optional semantic query).", input: InputSchema(&[("query", "string (optional)")]), output: "{ found, task? }" },
     Operation { subject: "bench.task.show", description: "Show a task with all notes and links.", input: InputSchema(&[("task_id", "number")]), output: "{ task with notes[] and edges[] }" },
+    Operation { subject: "bench.task.reembed", description: "Embed task notes that were stored without a vector (embedding model was missing), up to 500 per call.", input: InputSchema(&[]), output: "{ embedded, failed, still_missing, model }" },
     Operation { subject: "bench.task.search", description: "Semantic search across task notes.", input: InputSchema(&[("query", "string"), ("n", "number (optional, default 5)"), ("include_finished", "boolean (optional)")]), output: "{ results[] }" },
 ];
