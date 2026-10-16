@@ -149,7 +149,7 @@ impl BenchNats {
     }
 
     #[tool(
-        description = "Send a NATS Request-Reply message to a bench instance. Use list_operations to discover the subject and payload shape. The active target set via set_target is used automatically. Pass 'target' to override for a single call. Blocks until bench replies (timeout: 30 s). Start work in a repo with subject bench.context.brief, payload {repo: <path>}."
+        description = "Send a NATS Request-Reply message to a bench instance. Use list_operations to discover the subject and payload shape. The active target set via set_target is used automatically. Pass 'target' to override for a single call. Blocks until bench replies (timeout: 30 s, or the payload's timeout_seconds + 5 s, e.g. for bench.exec.exec). Start work in a repo with subject bench.context.brief, payload {repo: <path>}."
     )]
     async fn send_message(
         &self,
@@ -178,8 +178,24 @@ impl BenchNats {
             }
             other => other,
         };
+        // Long commands (exec with timeout_seconds, a release build) must not
+        // die at the 30 s NATS default while bench is still working: wait as
+        // long as the caller asked bench to wait, plus a little slack.
+        let wait = payload_value
+            .get("timeout_seconds")
+            .and_then(|v| v.as_u64())
+            .or_else(|| args.subject.ends_with("exec.exec").then_some(60))
+            .map(|s| std::time::Duration::from_secs(s.min(3600) + 5));
         let payload = serde_json::to_vec(&payload_value).unwrap_or_default();
-        match client.request(full_subject.clone(), payload.into()).await {
+        let reply = match wait {
+            Some(t) if t > std::time::Duration::from_secs(30) => {
+                client
+                    .send_request(full_subject.clone(), async_nats::Request::new().payload(payload.into()).timeout(Some(t)))
+                    .await
+            }
+            _ => client.request(full_subject.clone(), payload.into()).await,
+        };
+        match reply {
             // bench replies with bare result JSON; hand it back verbatim.
             Ok(msg) => {
                 let text = String::from_utf8_lossy(&msg.payload).to_string();
