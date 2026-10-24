@@ -113,7 +113,7 @@ static OPERATIONS: &[Operation] = &[
 
     // -- task ------------------------------------------------------
     Operation { subject: "bench.task.start", description: "Start a new task.", input: InputSchema(&[("goal", "string"), ("repo", "string (optional)")]), output: "{ task_id, goal, started_at, status }" },
-    Operation { subject: "bench.task.note", description: "Add a note to a task.", input: InputSchema(&[("task_id", "number"), ("kind", "hypothesis|finding|decision|question|observation"), ("text", "string")]), output: "{ id, task_id, kind }" },
+    Operation { subject: "bench.task.note", description: "Add a note to a task. kind=handoff: hand-over to the next session (context.brief shows the latest in full).", input: InputSchema(&[("task_id", "number"), ("kind", "hypothesis|finding|decision|question|observation|handoff"), ("text", "string")]), output: "{ id, task_id, kind }" },
     Operation { subject: "bench.task.link", description: "Link a task to an artefact.", input: InputSchema(&[("task_id", "number"), ("kind", "touched|produced|refers"), ("target", "string"), ("detail", "string (optional)")]), output: "{ task_id, kind, target, status }" },
     Operation { subject: "bench.task.finish", description: "Mark a task done or abandoned.", input: InputSchema(&[("task_id", "number"), ("outcome", "string"), ("status", "done|abandoned (optional, default done)")]), output: "{ task_id, status, outcome }" },
     Operation { subject: "bench.task.resume", description: "Resume the most recent active task (optional semantic query).", input: InputSchema(&[("query", "string (optional)")]), output: "{ found, task? }" },
