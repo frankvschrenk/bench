@@ -1,0 +1,113 @@
+# Baut die Bench unter Linux und Windows, legt die Programme als Artefakte ab
+# und hängt sie bei einem Tag v* an ein GitHub-Release.
+#
+# carbon-egui ist eine Pfad-Abhängigkeit (../carbon_egui). Darum werden beide
+# Repos nebeneinander ausgecheckt: bench/ und carbon_egui/. carbon_egui ist
+# privat, der Zugriff läuft über das Secret CARBON_EGUI_TOKEN (fine-grained
+# Token mit Contents: read auf frankvschrenk/carbon_egui).
+
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux
+            os: ubuntu-latest
+            binary: bench
+            artifact: bench-linux-x86_64
+          - name: Windows
+            os: windows-latest
+            binary: bench.exe
+            artifact: bench-windows-x86_64
+
+    steps:
+      - name: bench auschecken
+        uses: actions/checkout@v4
+        with:
+          path: bench
+
+      - name: carbon_egui auschecken
+        uses: actions/checkout@v4
+        with:
+          repository: frankvschrenk/carbon_egui
+          token: ${{ secrets.CARBON_EGUI_TOKEN }}
+          path: carbon_egui
+
+      - name: Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cargo-Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: bench
+
+      # eframe (glow, x11 + wayland) braucht unter Linux die Entwicklerpakete
+      # für Fenster, Tastatur und OpenGL.
+      - name: Linux-Pakete
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libxkbcommon-dev libwayland-dev libgl1-mesa-dev libx11-dev \
+            libxcursor-dev libxrandr-dev libxi-dev \
+            libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
+
+      - name: Tests
+        working-directory: bench
+        run: cargo test --locked
+
+      - name: Release-Build
+        working-directory: bench
+        run: cargo build --release --locked
+
+      - name: Artefakt hochladen
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: bench/target/release/${{ matrix.binary }}
+          if-no-files-found: error
+
+  release:
+    name: Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Archive packen
+        working-directory: dist
+        run: |
+          chmod +x bench-linux-x86_64/bench
+          tar -czf bench-linux-x86_64.tar.gz -C bench-linux-x86_64 bench
+          (cd bench-windows-x86_64 && zip -q ../bench-windows-x86_64.zip bench.exe)
+
+      - name: GitHub-Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/bench-linux-x86_64.tar.gz
+            dist/bench-windows-x86_64.zip
+          generate_release_notes: true
