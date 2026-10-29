@@ -7,6 +7,8 @@
 //
 // Der Draht-Vertrag ist unverändert, damit nichts umgestellt werden muss:
 //   HTTP  http://localhost:5556  /.well-known/openid-configuration, /jwks, /auth, /token
+//         (Issuer einstellbar: Einstellungen → Allgemein → „Issuer-URL des Dev-IdP“;
+//         anderer Host als localhost = lauscht auf 0.0.0.0, für Testrechner im Netz)
 //   NATS  oos.cmd.oosiam.user.{list,create,set_groups,set_password,delete}
 //   KV    oos-iam/user  {issuerUrl, clientId, redirectUri}
 // Benutzer liegen in Postgres (Schema iam in der App-DB aus Settings →
@@ -34,8 +36,8 @@ use tokio::sync::RwLock;
 
 use crate::settings::BenchSettings;
 
-const HOST: &str = "localhost";
-const PORT: u16 = 5556;
+const DEFAULT_ISSUER: &str = "http://localhost:5556";
+const DEFAULT_PORT: u16 = 5556;
 /// Standard-Client für Desktop-Apps (oos); veröffentlicht im KV.
 const CLIENT_ID: &str = "oos-desktop";
 const REDIRECT_URI: &str = "http://localhost:5557/callback";
@@ -49,10 +51,45 @@ const DEFAULT_DB: &str = "onisin";
 pub struct IamState {
     pool: RwLock<Option<PgPool>>,
     status: RwLock<String>,
+    issuer: RwLock<String>,
 }
 
-fn issuer() -> String {
-    format!("http://{HOST}:{PORT}")
+/// Issuer aus den Einstellungen (ohne abschließenden Schrägstrich), leer = localhost.
+pub fn issuer_of(s: &BenchSettings) -> String {
+    let i = s.iam_issuer.trim().trim_end_matches('/');
+    if i.is_empty() { DEFAULT_ISSUER.into() } else { i.into() }
+}
+
+/// Host und Port aus einer Issuer-URL „http(s)://host[:port][/pfad]“. None = keine gültige URL.
+pub fn issuer_host_port(issuer: &str) -> Option<(String, u16)> {
+    let rest = issuer.strip_prefix("http://").or_else(|| issuer.strip_prefix("https://"))?;
+    let authority = rest.split('/').next()?;
+    if authority.is_empty() {
+        return None;
+    }
+    // [::1]:5556, host:5556, host
+    let (host, port) = if let Some(v6) = authority.strip_prefix('[') {
+        let (h, after) = v6.split_once(']')?;
+        (format!("[{h}]"), after.strip_prefix(':'))
+    } else {
+        match authority.rsplit_once(':') {
+            Some((h, p)) => (h.to_string(), Some(p)),
+            None => (authority.to_string(), None),
+        }
+    };
+    let port = match port {
+        Some(p) => p.parse().ok()?,
+        None => DEFAULT_PORT,
+    };
+    (!host.is_empty()).then_some((host, port))
+}
+
+/// Lauschadresse: localhost bleibt lokal, jeder andere Host lauscht im Netz.
+fn bind_host(host: &str) -> &'static str {
+    match host {
+        "localhost" | "127.0.0.1" | "[::1]" => "localhost",
+        _ => "0.0.0.0",
+    }
 }
 
 /// Startet den IdP: Postgres, Schema, erster Admin, Schlüssel, HTTP, NATS, KV.
@@ -94,6 +131,12 @@ pub async fn start(settings: BenchSettings, key_path: PathBuf, state: Arc<IamSta
         Err(e) => return set_status(format!("aus – Signierschlüssel {}: {e}", key_path.display())).await,
     };
     let kid = key.kid.clone();
+    let issuer = issuer_of(&settings);
+    let Some((host, port)) = issuer_host_port(&issuer) else {
+        return set_status(format!("aus – Issuer-URL ungültig: {issuer}")).await;
+    };
+    let bind = bind_host(&host);
+    *state.issuer.write().await = issuer.clone();
     *state.pool.write().await = Some(pool.clone());
 
     // Dienstkonto für den Benutzer-Abgleich (waki & Co.), Geheimnis neben dem Schlüssel
@@ -109,10 +152,10 @@ pub async fn start(settings: BenchSettings, key_path: PathBuf, state: Arc<IamSta
 
     // HTTP (OAuth2 + PKCE)
     {
-        let (pool, state) = (pool.clone(), state.clone());
+        let (pool, state, issuer) = (pool.clone(), state.clone(), issuer.clone());
         tokio::spawn(async move {
-            if let Err(e) = server::serve(HOST.into(), PORT, pool, key, issuer(), TOKEN_TTL_SEC, CODE_TTL_SEC, sync_access).await {
-                let msg = format!("HTTP :{PORT} fehlgeschlagen (läuft noch ein alter oosiam?): {e}");
+            if let Err(e) = server::serve(bind.into(), port, pool, key, issuer, TOKEN_TTL_SEC, CODE_TTL_SEC, sync_access).await {
+                let msg = format!("HTTP {bind}:{port} fehlgeschlagen (läuft noch ein alter oosiam?): {e}");
                 eprintln!("[bench/iam] {msg}");
                 *state.status.write().await = format!("gestört – {msg}");
             }
@@ -129,7 +172,7 @@ pub async fn start(settings: BenchSettings, key_path: PathBuf, state: Arc<IamSta
                     eprintln!("[bench/iam] NATS-Subjects: {e}");
                 }
                 let cfg = kv::IamClientConfig {
-                    issuer_url: issuer(),
+                    issuer_url: issuer.clone(),
                     client_id: CLIENT_ID.into(),
                     redirect_uri: REDIRECT_URI.into(),
                 };
@@ -140,7 +183,7 @@ pub async fn start(settings: BenchSettings, key_path: PathBuf, state: Arc<IamSta
             }
         },
     };
-    set_status(format!("läuft – {} · {db} · {nats_note} · kid {kid}", issuer())).await;
+    set_status(format!("läuft – {issuer} (lauscht {bind}:{port}) · {db} · {nats_note} · kid {kid}")).await;
 }
 
 // ── Funktionen für die Users-Ansicht ─────────────────────────────────
@@ -167,7 +210,7 @@ fn err(e: anyhow::Error) -> String {
 
 pub async fn iam_info(state: &IamState) -> IamInfo {
     IamInfo {
-        issuer: issuer(),
+        issuer: state.issuer.read().await.clone(),
         status: state.status.read().await.clone(),
         running: state.pool.read().await.is_some(),
     }
@@ -209,4 +252,31 @@ pub async fn iam_delete(state: &IamState, id: i32) -> Result<(), String> {
     store::delete_user(&pool(state).await?, id).await.map_err(err)?;
     sync::changed();
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn issuer_zerlegen() {
+        assert_eq!(issuer_host_port("http://localhost:5556"), Some(("localhost".into(), 5556)));
+        assert_eq!(issuer_host_port("http://192.168.1.71:5556"), Some(("192.168.1.71".into(), 5556)));
+        assert_eq!(issuer_host_port("https://idp.example"), Some(("idp.example".into(), DEFAULT_PORT)));
+        assert_eq!(issuer_host_port("http://[::1]:7000/realms/x"), Some(("[::1]".into(), 7000)));
+        assert_eq!(issuer_host_port("localhost:5556"), None);
+        assert_eq!(issuer_host_port("http://host:abc"), None);
+        assert_eq!(issuer_host_port("http://"), None);
+    }
+
+    #[test]
+    fn lauschadresse() {
+        assert_eq!(bind_host("localhost"), "localhost");
+        assert_eq!(bind_host("[::1]"), "localhost");
+        assert_eq!(bind_host("192.168.1.71"), "0.0.0.0");
+        let leer = BenchSettings::default();
+        assert_eq!(issuer_of(&leer), "http://localhost:5556");
+        let s = BenchSettings { iam_issuer: " http://mac.local:5556/ ".into(), ..Default::default() };
+        assert_eq!(issuer_of(&s), "http://mac.local:5556");
+    }
 }

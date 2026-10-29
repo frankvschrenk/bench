@@ -26,17 +26,21 @@ fn save_button(ui: &mut Ui, enabled: bool) -> bool {
 pub struct GeneralPage {
     instance_name: String,
     otlp_port: String,
+    iam_issuer: String,
 }
 
 impl GeneralPage {
     pub fn reset(&mut self, s: &BenchSettings) {
         self.instance_name = s.instance_name.clone();
         self.otlp_port = s.otlp_port.to_string();
+        self.iam_issuer = s.iam_issuer.clone();
     }
 
     pub fn show(&mut self, ui: &mut Ui, s: &BenchSettings) -> Option<BenchSettings> {
         style::page_title(ui, "Allgemein", "Name und lokale Dienste dieser Bench-Instanz.");
         let port = self.otlp_port.trim().parse::<u16>().ok().filter(|p| *p >= 1024);
+        let issuer = self.iam_issuer.trim().trim_end_matches('/').to_string();
+        let issuer_ok = issuer.is_empty() || crate::iam::issuer_host_port(&issuer).is_some();
         let mut save = false;
         Form::new().width(FORM_WIDTH).show(ui, |form| {
             form.full(|ui| {
@@ -59,12 +63,23 @@ impl GeneralPage {
                 }
                 ui.add(input)
             });
-            form.full(|ui| save = save_button(ui, port.is_some()));
+            form.full(|ui| {
+                let mut input = TextInput::new(&mut self.iam_issuer)
+                    .label("Issuer-URL des Dev-IdP")
+                    .placeholder("http://localhost:5556")
+                    .helper_text("Leer = nur dieser Rechner. Mit Rechnername oder IP (z. B. http://192.168.1.71:5556) lauscht der IdP im Netz – Server müssen dieselbe URL als Issuer bekommen. Wirkt nach einem Neustart.");
+                if !issuer_ok {
+                    input = input.invalid("http(s)://host[:port]");
+                }
+                ui.add(input)
+            });
+            form.full(|ui| save = save_button(ui, port.is_some() && issuer_ok));
         });
         let port = port?;
         save.then(|| BenchSettings {
             instance_name: self.instance_name.trim().to_string(),
             otlp_port: port,
+            iam_issuer: issuer,
             ..s.clone()
         })
     }

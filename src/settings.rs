@@ -35,6 +35,10 @@ pub struct BenchSettings {
     pub dsn: String,
     /// Application database name the pg.* tools operate on (typically "onisin").
     pub app_database: String,
+    /// Issuer-URL des Dev-IdP, z. B. "http://192.168.1.71:5556". Leer = "http://localhost:5556"
+    /// (nur dieser Rechner). Steht ein anderer Host als localhost darin, lauscht der IdP
+    /// im Netz (0.0.0.0) – so erreichen ihn Server und Browser auf anderen Rechnern.
+    pub iam_issuer: String,
 }
 
 impl Default for BenchSettings {
@@ -49,6 +53,7 @@ impl Default for BenchSettings {
             otlp_port: 4318,
             dsn: String::new(),
             app_database: String::new(),
+            iam_issuer: String::new(),
         }
     }
 }
