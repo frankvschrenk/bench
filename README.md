@@ -23,7 +23,13 @@ KV `oos-iam`) ist unverändert.
 cargo run              # Debug
 cargo build --release  # target/release/bench (bench.exe unter Windows)
 cargo test
+./scripts/bundle-macos.sh   # macOS: target/release/bundle/Onisin OS - Bench.app
 ```
+
+Die .app ist ad-hoc signiert. Installieren: nach `/Applications` kopieren
+(`ditto "target/release/bundle/Onisin OS - Bench.app" "/Applications/Onisin OS - Bench.app"`).
+Sie nutzt denselben Datenordner wie die Tauri-Bench – nicht beide gleichzeitig
+starten (gleiche NATS-Queue, gleiche Ports 4318/5556).
 
 Rust ≥ 1.95. Unter Linux braucht eframe die Pakete `libxkbcommon-dev
 libwayland-dev libgl1-mesa-dev libx11-dev libxcursor-dev libxrandr-dev
@@ -67,8 +73,9 @@ Umgebungsvariablen:
 
 ## CI
 
-`.github/workflows/build.yml` baut und testet unter Linux und Windows und lädt
-die Programme als Artefakte hoch; ein Tag `v*` erzeugt ein GitHub-Release mit
-`bench-linux-x86_64.tar.gz` und `bench-windows-x86_64.zip`. Da `carbon_egui`
+`.github/workflows/build.yml` baut und testet unter Linux, Windows und macOS
+(als .app) und lädt die Programme als Artefakte hoch; ein Tag `v*` erzeugt ein
+GitHub-Release mit `bench-linux-x86_64.tar.gz`, `bench-windows-x86_64.zip` und
+`bench-macos-arm64.zip`. Da `carbon_egui`
 privat ist, braucht das Repo das Secret `CARBON_EGUI_TOKEN` (fine-grained
 Token, Contents: read auf `frankvschrenk/carbon_egui`).

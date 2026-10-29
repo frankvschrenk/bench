@@ -1,4 +1,4 @@
-# Baut die Bench unter Linux und Windows, legt die Programme als Artefakte ab
+# Baut die Bench unter Linux, Windows und macOS (als .app), legt die Programme als Artefakte ab
 # und hängt sie bei einem Tag v* an ein GitHub-Release.
 #
 # carbon-egui ist eine Pfad-Abhängigkeit (../carbon_egui). Darum werden beide
@@ -37,6 +37,10 @@ jobs:
             os: windows-latest
             binary: bench.exe
             artifact: bench-windows-x86_64
+          - name: macOS
+            os: macos-latest
+            binary: bundle/bench-macos-arm64.zip
+            artifact: bench-macos-arm64
 
     steps:
       - name: bench auschecken
@@ -75,8 +79,15 @@ jobs:
         run: cargo test --locked
 
       - name: Release-Build
+        if: runner.os != 'macOS'
         working-directory: bench
         run: cargo build --release --locked
+
+      # macOS: Release-Build + .app (ad-hoc signiert), gezippt mit ditto
+      - name: Release-Build als .app
+        if: runner.os == 'macOS'
+        working-directory: bench
+        run: ZIP=1 ./scripts/bundle-macos.sh
 
       - name: Artefakt hochladen
         uses: actions/upload-artifact@v7
@@ -103,6 +114,7 @@ jobs:
           chmod +x bench-linux-x86_64/bench
           tar -czf bench-linux-x86_64.tar.gz -C bench-linux-x86_64 bench
           (cd bench-windows-x86_64 && zip -q ../bench-windows-x86_64.zip bench.exe)
+          cp bench-macos-arm64/bench-macos-arm64.zip .
 
       - name: GitHub-Release
         uses: softprops/action-gh-release@v3
@@ -110,4 +122,5 @@ jobs:
           files: |
             dist/bench-linux-x86_64.tar.gz
             dist/bench-windows-x86_64.zip
+            dist/bench-macos-arm64.zip
           generate_release_notes: true
