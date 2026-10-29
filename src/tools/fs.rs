@@ -409,6 +409,8 @@ fn edit_many(args: Value, roots: &RootRegistry) -> Result<Value, ToolError> {
                 // temp file + rename: a crash never leaves a half-written file
                 let tmp = abs.with_extension("bench-edit-tmp");
                 std::fs::write(&tmp, cur)?;
+                // Rechte der alten Datei behalten (sonst ist z. B. ein Startskript nicht mehr ausführbar)
+                std::fs::set_permissions(&tmp, std::fs::metadata(abs)?.permissions())?;
                 std::fs::rename(&tmp, abs)?;
                 changed += 1;
             }
@@ -624,6 +626,23 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&b).unwrap(), "3");
         // outside the roots is refused
         assert!(edit_many(json!({ "edits": [{ "path": "/etc/hosts", "find": "x", "replace": "y" }] }), &roots).is_err());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn edit_many_keeps_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("bench-edit-mode-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("start.sh");
+        std::fs::write(&f, "echo alt").unwrap();
+        std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let roots = crate::roots::build_root_registry(&[dir.to_string_lossy().into_owned()]);
+        let r = json!({ "edits": [{ "path": f.to_string_lossy(), "find": "alt", "replace": "neu" }] });
+        edit_many(r, &roots).unwrap();
+        assert_eq!(std::fs::read_to_string(&f).unwrap(), "echo neu");
+        assert_eq!(std::fs::metadata(&f).unwrap().permissions().mode() & 0o777, 0o755);
         let _ = std::fs::remove_dir_all(dir);
     }
 }
