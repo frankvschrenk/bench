@@ -30,7 +30,7 @@ jobs:
       matrix:
         include:
           - name: Linux
-            os: ubuntu-latest
+            os: ubuntu-24.04
             binary: bench
             artifact: bench-linux-x86_64
           - name: Windows
@@ -40,12 +40,12 @@ jobs:
 
     steps:
       - name: bench auschecken
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           path: bench
 
       - name: carbon_egui auschecken
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: frankvschrenk/carbon_egui
           token: ${{ secrets.CARBON_EGUI_TOKEN }}
@@ -79,7 +79,7 @@ jobs:
         run: cargo build --release --locked
 
       - name: Artefakt hochladen
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact }}
           path: bench/target/release/${{ matrix.binary }}
@@ -89,11 +89,11 @@ jobs:
     name: Release
     if: startsWith(github.ref, 'refs/tags/v')
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: dist
 
@@ -105,7 +105,7 @@ jobs:
           (cd bench-windows-x86_64 && zip -q ../bench-windows-x86_64.zip bench.exe)
 
       - name: GitHub-Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: |
             dist/bench-linux-x86_64.tar.gz
