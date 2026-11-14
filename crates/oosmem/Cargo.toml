@@ -1,0 +1,27 @@
+[package]
+name = "oosmem"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+# oosmem carries the workspace BSL-1.1 (it is domain logic, unlike the
+# generic bench-nats bridge which stays Apache-2.0).
+
+[[bin]]
+name = "oosmem"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+async-nats = { workspace = true }
+chrono = { workspace = true, features = ["serde"] }
+futures = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+
+# oosmem-only: xxHash64, kept bit-compatible with the Go cespare/xxhash/v2
+# that the existing store's token-hash vectors were built with. Pinned here
+# because no other workspace member hashes tokens.
+twox-hash = "2"
