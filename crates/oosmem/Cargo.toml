@@ -3,7 +3,7 @@ name = "oosmem"
 version = "0.1.0"
 edition.workspace = true
 authors.workspace = true
-# oosmem carries the workspace BSL-1.1 (it is domain logic, unlike the
+# oosmem carries the BSL-1.1 of onisin (it is domain logic, unlike the
 # generic bench-nats bridge which stays Apache-2.0).
 
 [[bin]]

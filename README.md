@@ -10,6 +10,21 @@ Carbon-Widgets aus [`carbon_egui`](https://github.com/frankvschrenk/carbon_egui)
 Der Draht-Vertrag (Subjects, JSON-Antworten, `oos.bench.debug`, IdP-Endpunkte,
 KV `oos-iam`) ist unverändert.
 
+## Mitgelieferte Dienste
+
+Das Repo ist ein Cargo-Workspace. Neben der Bench liegen zwei Programme, die
+mit ihr ausgeliefert werden (beide am 14.11.2026 mit Historie aus
+`onisin/services` übernommen):
+
+| Crate | Programm | Aufgabe | Lizenz |
+|---|---|---|---|
+| `crates/oosmem` | `oosmem` | Gedächtnis-Speicher über NATS (`oos.cmd.mem.*`): Handbuch-Einträge, Notizen, Suche | BSL-1.1 |
+| `crates/bench-nats` | `bench-nats` | MCP-Brücke: Claude startet sie per stdio, sie spricht `bench.*` über NATS | Apache-2.0 |
+
+oosmem bleibt ein eigener Prozess: `oosmem -data <ordner> [-nats nats://127.0.0.1:4222] [-llm-url …] [-llm-model …]`.
+Das Standardmodell `gemma4:e4b-mlx` gibt es nur auf dem Mac, unter Windows/Linux
+ein anderes Ollama-Modell per `-llm-model` angeben.
+
 ## Bauen
 
 `carbon_egui` muss neben diesem Repo liegen (Pfad-Abhängigkeit `../carbon_egui`):
@@ -21,9 +36,9 @@ KV `oos-iam`) ist unverändert.
 
 ```sh
 cargo run              # Debug
-cargo build --release  # target/release/bench (bench.exe unter Windows)
-cargo test
-./scripts/bundle-macos.sh   # macOS: target/release/bundle/Onisin OS - Bench.app
+cargo build --release --workspace  # target/release/{bench,oosmem,bench-nats}(.exe)
+cargo test --workspace
+./scripts/bundle-macos.sh   # macOS: target/release/bundle/Onisin OS - Bench.app (mit oosmem + bench-nats)
 ```
 
 Die .app ist ad-hoc signiert. Installieren: nach `/Applications` kopieren

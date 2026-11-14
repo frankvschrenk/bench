@@ -13,7 +13,7 @@
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::Write;
-use std::os::unix::fs::FileExt;
+use pos_io::PosIo;
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
@@ -489,5 +489,63 @@ mod tests {
             worst.1, worst.0
         );
         assert!(checked > 0, "no non-zero vectors verified -- store empty or all zero?");
+    }
+}
+
+/// Positional file IO on every platform. Unix has read_exact_at/write_all_at
+/// directly; Windows only has seek_read/seek_write, which may transfer fewer
+/// bytes, so they are looped here. All store IO is positional, so the cursor
+/// move that seek_* does on Windows does not matter.
+mod pos_io {
+    use std::fs::File;
+    use std::io;
+
+    pub trait PosIo {
+        fn read_exact_at(&self, buf: &mut [u8], offset: u64) -> io::Result<()>;
+        fn write_all_at(&self, buf: &[u8], offset: u64) -> io::Result<()>;
+    }
+
+    #[cfg(unix)]
+    impl PosIo for File {
+        fn read_exact_at(&self, buf: &mut [u8], offset: u64) -> io::Result<()> {
+            std::os::unix::fs::FileExt::read_exact_at(self, buf, offset)
+        }
+        fn write_all_at(&self, buf: &[u8], offset: u64) -> io::Result<()> {
+            std::os::unix::fs::FileExt::write_all_at(self, buf, offset)
+        }
+    }
+
+    #[cfg(windows)]
+    impl PosIo for File {
+        fn read_exact_at(&self, mut buf: &mut [u8], mut offset: u64) -> io::Result<()> {
+            use std::os::windows::fs::FileExt;
+            while !buf.is_empty() {
+                match self.seek_read(buf, offset) {
+                    Ok(0) => return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "failed to fill whole buffer")),
+                    Ok(n) => {
+                        buf = &mut buf[n..];
+                        offset += n as u64;
+                    }
+                    Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+                    Err(e) => return Err(e),
+                }
+            }
+            Ok(())
+        }
+        fn write_all_at(&self, mut buf: &[u8], mut offset: u64) -> io::Result<()> {
+            use std::os::windows::fs::FileExt;
+            while !buf.is_empty() {
+                match self.seek_write(buf, offset) {
+                    Ok(0) => return Err(io::Error::new(io::ErrorKind::WriteZero, "failed to write whole buffer")),
+                    Ok(n) => {
+                        buf = &buf[n..];
+                        offset += n as u64;
+                    }
+                    Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+                    Err(e) => return Err(e),
+                }
+            }
+            Ok(())
+        }
     }
 }

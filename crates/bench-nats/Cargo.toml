@@ -26,4 +26,6 @@ tokio = { workspace = true }
 # #[tool_router]; `schemars` (re-exported) derives the tool input
 # schemas. Pinned here rather than in workspace.deps because no other
 # member touches MCP (same call as oosiam's axum/rsa).
+# Home-Verzeichnis auch unter Windows (USERPROFILE statt HOME)
+dirs = "6"
 rmcp = { version = "1.7", features = ["server", "transport-io", "macros"] }

@@ -22,8 +22,10 @@ fn nats_url() -> String {
 /// macOS-native Application Support dir) so a freshly built binary reads
 /// the very same target the running one already wrote.
 fn session_path() -> PathBuf {
-    let home = std::env::var("HOME").unwrap_or_default();
-    PathBuf::from(home).join(".config").join("bench-nats").join("session.json")
+    // dirs::home_dir: HOME auf Unix, das Benutzerprofil unter Windows (dort
+    // gibt es kein HOME).
+    let home = dirs::home_dir().unwrap_or_default();
+    home.join(".config").join("bench-nats").join("session.json")
 }
 
 /// The active bench instance name, or "" for "any bench".
