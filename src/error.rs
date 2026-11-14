@@ -1,7 +1,7 @@
 //! Tool error type.
 //
 // Why a dedicated error (separate from any future invoke-command error): tool
-// handlers answer NATS callers, not the webview. Every handler returns
+// handlers answer MCP/HTTP callers, not the window. Every handler returns
 // Result<Value, ToolError>; the dispatcher renders an Err as the wire shape
 // {"error": "<message>"} — the same contract the Bun bench used (errResult).
 

@@ -1,5 +1,5 @@
-//! Observability surface: the bridge to the window, the consumers that feed
-//! it, and the NATS reconnect supervisor.
+//! Observability surface: the bridge to the window, the OTLP receiver that
+//! feeds it, and the reload loop that applies saved settings.
 //
 // Ported from the Tauri bench. The mapping:
 //   - UiSink replaces the Tauri event bus ("tool-event" / "log-record" /
@@ -8,8 +8,7 @@
 //     buffers on its own, so the old buffer-until-ready dance is gone.
 //   - AppState keeps the live settings snapshot and the reconnect poke;
 //     save_settings is a plain method the window calls instead of a command.
-//   - supervisor() owns the live NATS connections for the app's lifetime and
-//     rebuilds them on every save.
+//   - supervisor() applies saved settings to the running tool interface.
 //   - the OTLP receiver binds once, in boot, so changing otlpPort still needs
 //     a restart.
 
@@ -17,19 +16,12 @@ use std::path::PathBuf;
 use std::sync::mpsc as std_mpsc;
 use std::sync::Arc;
 
-use async_nats::{Client, ConnectOptions, Event};
 use chrono::{SecondsFormat, Utc};
-use futures::StreamExt;
 use serde_json::{Map, Value};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, RwLock};
-use tokio::task::JoinHandle;
 
-use crate::ctx::Ctx;
-use crate::dispatcher::{self, DEBUG_SUBJECT};
-use crate::events_log::EventLog;
-use crate::roots;
 use crate::settings::{self, BenchSettings};
 use crate::telemetry::{LogRecord, ServerStatus, ToolEvent};
 
@@ -62,15 +54,15 @@ impl UiSink {
         }
     }
 
-    fn tool(&self, event: ToolEvent) {
+    pub fn tool(&self, event: ToolEvent) {
         self.send(UiEvent::Tool(event));
     }
 
-    fn log(&self, record: LogRecord) {
+    pub fn log(&self, record: LogRecord) {
         self.send(UiEvent::Log(record));
     }
 
-    fn status(&self, status: ServerStatus) {
+    pub fn status(&self, status: ServerStatus) {
         self.send(UiEvent::Status(status));
     }
 }
@@ -84,7 +76,7 @@ pub struct AppState {
     pub settings: Arc<RwLock<BenchSettings>>,
     /// Where save_settings persists (settings.json in the data dir).
     settings_path: PathBuf,
-    /// Pokes the supervisor to tear down and rebuild the NATS connections.
+    /// Pokes the supervisor to apply the saved settings.
     reconnect_tx: mpsc::Sender<()>,
 }
 
@@ -101,165 +93,30 @@ impl AppState {
         }
     }
 
-    /// Persist updated settings, update the live snapshot, and trigger a NATS
-    /// reconnect. otlpPort changes take effect on the next app start.
+    /// Persist updated settings, update the live snapshot, and apply them.
+    /// Ports, network mode and the memory folder take effect on the next start.
     pub async fn save_settings(&self, settings: BenchSettings) -> Result<(), String> {
         settings::save(&self.settings_path, &settings)?;
         // Update the shared snapshot first so pg.* tools observe the new DSN
-        // immediately, even before the reconnect finishes.
+        // immediately.
         *self.settings.write().await = settings;
-        // Best-effort poke: a full channel means a reconnect is already queued.
+        // Best-effort poke: a full channel means a reload is already queued.
         let _ = self.reconnect_tx.try_send(());
         Ok(())
     }
 }
 
-// ─── Reconnect supervisor ─────────────────────────────────────
+// ─── Reload on save ─────────────────────────────────────────────
 
-/// Everything the supervisor needs that doesn't change across reconnects.
-pub struct Boot {
-    pub ui: UiSink,
-    pub state: Arc<AppState>,
-    pub event_log: Arc<EventLog>,
-}
-
-// The live connections + subscription loops of one connect cycle. Dropped and
-// rebuilt on every reconnect.
-struct Live {
-    clients: Vec<Client>,
-    tasks: Vec<JoinHandle<()>>,
-}
-
-impl Live {
-    async fn shutdown(self) {
-        for task in &self.tasks {
-            task.abort();
-        }
-        for client in self.clients {
-            // drain() flushes in-flight replies before closing, so a call mid
-            // handler still gets its answer out before the socket goes away.
-            let _ = client.drain().await;
-        }
+/// Apply saved settings for the app's lifetime: every poke from save_settings
+/// rebuilds the tool context (allowed roots, instance name). Port, network
+/// mode and the memory folder are bound at boot and need a restart. Returns
+/// when all senders are dropped (app shutdown).
+pub async fn supervisor(api: Arc<crate::api::Api>, state: Arc<AppState>, mut reload_rx: mpsc::Receiver<()>) {
+    while reload_rx.recv().await.is_some() {
+        let snapshot = state.settings.read().await.clone();
+        api.reload(&snapshot).await;
     }
-}
-
-/// Own the NATS connections for the app's lifetime. Connects once, then rebuilds
-/// on every poke from save_settings. Returns when all senders are dropped
-/// (app shutdown).
-pub async fn supervisor(boot: Boot, mut reconnect_rx: mpsc::Receiver<()>) {
-    let mut live = connect_all(&boot).await;
-    while reconnect_rx.recv().await.is_some() {
-        live.shutdown().await;
-        live = connect_all(&boot).await;
-    }
-    live.shutdown().await;
-}
-
-// Read the current settings, connect to every server, build the tool Ctx on the
-// first connected client, wire the responder subscriptions and the debug
-// consumer. Faithful to the Bun doConnect: an empty/unconnectable server set
-// leaves the bench idle rather than failing.
-async fn connect_all(boot: &Boot) -> Live {
-    let snapshot = boot.state.settings.read().await.clone();
-    let root_paths: Vec<String> = snapshot.roots.iter().map(|r| r.path.clone()).collect();
-    let roots = Arc::new(roots::build_root_registry(&root_paths));
-
-    let mut clients = Vec::new();
-    for srv in &snapshot.servers {
-        match connect_one(boot, srv).await {
-            Some(client) => {
-                eprintln!("[bench] connected to {} ({})", srv.name, srv.url);
-                boot.ui.status(ServerStatus {
-                    name: srv.name.clone(),
-                    url: srv.url.clone(),
-                    connected: true,
-                });
-                clients.push(client);
-            }
-            None => {
-                eprintln!("[bench] connect failed for {} ({})", srv.name, srv.url);
-                boot.ui.status(ServerStatus {
-                    name: srv.name.clone(),
-                    url: srv.url.clone(),
-                    connected: false,
-                });
-            }
-        }
-    }
-
-    if clients.is_empty() {
-        eprintln!("[bench] no NATS servers connected — dispatcher idle (Einstellungen → NATS-Server)");
-        return Live {
-            clients,
-            tasks: Vec::new(),
-        };
-    }
-
-    // First connected client is the outbound path for memory/task → oosmem and
-    // the source for the debug consumer (the Bun connectLogNats used servers[0]).
-    let ctx = Arc::new(Ctx {
-        roots: roots.clone(),
-        settings: boot.state.settings.clone(),
-        nats: clients[0].clone(),
-    });
-
-    let mut tasks = Vec::new();
-    for client in &clients {
-        tasks.extend(dispatcher::subscribe_responders(
-            client.clone(),
-            snapshot.instance_name.clone(),
-            ctx.clone(),
-            boot.event_log.clone(),
-        ));
-    }
-    tasks.push(spawn_debug_consumer(clients[0].clone(), boot.ui.clone()));
-
-    Live { clients, tasks }
-}
-
-// Connect to one server, attaching an event callback that keeps the window's
-// status surface live across drops/reconnects (the Bun nc.closed() analog).
-async fn connect_one(boot: &Boot, srv: &settings::NatsServer) -> Option<Client> {
-    let ui = boot.ui.clone();
-    let name = srv.name.clone();
-    let url = srv.url.clone();
-
-    let opts = ConnectOptions::new().event_callback(move |event| {
-        let ui = ui.clone();
-        let name = name.clone();
-        let url = url.clone();
-        async move {
-            let connected = match event {
-                Event::Connected => true,
-                Event::Disconnected => false,
-                _ => return,
-            };
-            ui.status(ServerStatus { name, url, connected });
-        }
-    });
-
-    opts.connect(srv.url.as_str()).await.ok()
-}
-
-// Subscribe to oos.bench.debug and forward each ToolEvent to the window. Lets
-// the Tools view work even when bench-nats isn't in the loop, and shows events
-// from other instances on the same bus. Faithful to the Bun connectLogNats.
-fn spawn_debug_consumer(client: Client, ui: UiSink) -> JoinHandle<()> {
-    tokio::spawn(async move {
-        let mut sub = match client.subscribe(DEBUG_SUBJECT).await {
-            Ok(sub) => sub,
-            Err(err) => {
-                eprintln!("[bench] subscribe {DEBUG_SUBJECT} failed: {err}");
-                return;
-            }
-        };
-        while let Some(msg) = sub.next().await {
-            // Ignore malformed events, like the Bun try/catch.
-            if let Ok(event) = serde_json::from_slice::<ToolEvent>(&msg.payload) {
-                ui.tool(event);
-            }
-        }
-    })
 }
 
 // ─── OTLP HTTP receiver ────────────────────────────────────────

@@ -1,45 +1,27 @@
-//! NATS request-reply dispatcher — the bench's reason for existing.
+//! Tool dispatcher — the bench's reason for existing.
 //
-// Subject scheme (faithful to the Bun dispatcher):
-//   bench.<group>.<op>                → any instance (queue group "bench")
-//   {instanceName}.bench.<group>.<op> → only this instance (queue {instanceName})
-// bench-nats prefixes the subject with "{instanceName}." to target one box.
-//
-// Each incoming message carries JSON args; the dispatcher routes to the tool
-// handler and replies with the handler's JSON result, or {"error": "..."}.
-//
-// After every *known* call it emits telemetry: a ToolEvent on oos.bench.debug
-// (live feed for the window and bench-nats) and a bench_events row (audit log).
-// Unknown subjects only get the error reply — no telemetry — matching the Bun
-// handler, which returned before the event was built.
-//
-// This module owns only the responder side. Connection lifecycle (connect,
-// reconnect, status, the debug consumer, OTLP) lives in `observe`, which calls
-// subscribe_responders once per connected client.
+// Every call (from /mcp, from bench-nats via POST /call/<operation>) lands in
+// `call`: route to the tool handler, render the reply as JSON, and emit
+// telemetry (a ToolEvent for the window's live feed and a bench_events row
+// for the audit log). Unknown operations only get the error reply — no
+// telemetry — matching the Bun handler. Until 14.11.2026 this answered NATS
+// request-reply on bench.> / {instance}.bench.>; the reply shapes are unchanged.
 
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use async_nats::{Client, Message};
 use chrono::{SecondsFormat, Utc};
-use futures::StreamExt;
 use serde_json::{json, Value};
-use tokio::task::JoinHandle;
 use uuid::Uuid;
 
 use crate::ctx::Ctx;
 use crate::error::ToolError;
 use crate::events_log::EventLog;
+use crate::observe::UiSink;
 use crate::telemetry::ToolEvent;
 use crate::tools;
 
-/// Subject the tool telemetry is published on. The observe-side consumer
-/// subscribes to the same subject to feed the window.
-pub const DEBUG_SUBJECT: &str = "oos.bench.debug";
-
-// Per-call deadline. Most handlers finish well under NATS' own 30 s
-// request-reply window; a slow non-exempt one replies with an error at the
-// deadline instead of letting the caller hang. The exec/push/reset subjects
+// Per-call deadline. A slow non-exempt handler replies with an error at the
+// deadline instead of letting the caller hang. The exec/push/reset operations
 // are exempt because they legitimately run longer (the caller sets the bound).
 const HANDLER_DEADLINE: Duration = Duration::from_millis(25_000);
 
@@ -50,102 +32,25 @@ fn is_unlimited(subject: &str) -> bool {
     )
 }
 
-/// Wire the shared and (optionally) instance-targeted subscriptions on one
-/// connected client, and return the JoinHandles of the two subscription loops
-/// so the supervisor can abort them on reconnect.
-//
-// handle() is fire-and-forget per message: a slow call (large search, long
-// exec) must never block the loop from dispatching the next request — otherwise
-// a busy single consumer makes NATS return NoResponders (503) to fresh callers.
-pub fn subscribe_responders(
-    client: Client,
-    instance: String,
-    ctx: Arc<Ctx>,
-    event_log: Arc<EventLog>,
-) -> Vec<JoinHandle<()>> {
-    let mut tasks = Vec::new();
-
-    // Shared queue — any bench instance can answer.
-    {
-        let client = client.clone();
-        let ctx = ctx.clone();
-        let event_log = event_log.clone();
-        tasks.push(tokio::spawn(async move {
-            let mut sub = match client.queue_subscribe("bench.>", "bench".to_string()).await {
-                Ok(sub) => sub,
-                Err(err) => {
-                    eprintln!("[bench] subscribe bench.> failed: {err}");
-                    return;
-                }
-            };
-            while let Some(msg) = sub.next().await {
-                let client = client.clone();
-                let ctx = ctx.clone();
-                let event_log = event_log.clone();
-                tokio::spawn(async move { handle(msg, &client, None, &ctx, &event_log).await });
-            }
-        }));
-    }
-
-    // Targeted queue — only this named instance answers.
-    if !instance.is_empty() {
-        let prefix = format!("{instance}.");
-        let subject = format!("{prefix}bench.>");
-        let client = client.clone();
-        tasks.push(tokio::spawn(async move {
-            let mut sub = match client.queue_subscribe(subject, instance).await {
-                Ok(sub) => sub,
-                Err(err) => {
-                    eprintln!("[bench] subscribe targeted failed: {err}");
-                    return;
-                }
-            };
-            while let Some(msg) = sub.next().await {
-                let client = client.clone();
-                let ctx = ctx.clone();
-                let event_log = event_log.clone();
-                let prefix = prefix.clone();
-                tokio::spawn(
-                    async move { handle(msg, &client, Some(prefix), &ctx, &event_log).await },
-                );
-            }
-        }));
-    }
-
-    tasks
+/// Outcome of one call.
+pub enum Reply {
+    /// The tool ran: rendered JSON (pretty on success, {"error"} on failure).
+    Done { text: String },
+    /// No such operation.
+    Unknown(String),
 }
 
-async fn handle(
-    msg: Message,
-    client: &Client,
-    strip: Option<String>,
-    ctx: &Ctx,
-    event_log: &EventLog,
-) {
-    // Strip the instance prefix so route keys always start with "bench.".
-    let full = msg.subject.as_str();
-    let subject = match &strip {
-        Some(p) if full.starts_with(p.as_str()) => &full[p.len()..],
-        _ => full,
-    };
-
-    let args: Value = serde_json::from_slice(&msg.payload).unwrap_or_else(|_| json!({}));
-
+/// Run one operation and record it.
+pub async fn call(subject: &str, args: Value, ctx: &Ctx, ui: &UiSink, event_log: &EventLog) -> Reply {
     let started = Instant::now();
     let ts = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
     let args_for_event = args.clone();
 
-    // Unknown subject: reply error and stop — no telemetry, as in the Bun bench.
     let Some(result) = route(subject, args, ctx).await else {
-        if let Some(reply) = msg.reply {
-            let _ = client
-                .publish(reply, err_json(&format!("unknown subject: {subject}")).into())
-                .await;
-        }
-        return;
+        return Reply::Unknown(err_json(&format!("unknown subject: {subject}")));
     };
 
-    // Render the wire reply: pretty JSON on success (matching the Bun jsonResult
+    // Render the reply: pretty JSON on success (matching the Bun jsonResult
     // 2-space output), compact {"error": ...} on failure.
     let (reply_text, status, error_msg): (String, &str, Option<String>) = match result {
         Ok(value) => (
@@ -159,10 +64,6 @@ async fn handle(
         }
     };
 
-    if let Some(reply) = msg.reply {
-        let _ = client.publish(reply, reply_text.clone().into()).await;
-    }
-
     let event = ToolEvent {
         id: Uuid::new_v4().to_string(),
         tool: subject.to_string(),
@@ -173,12 +74,10 @@ async fn handle(
         result_size: reply_text.len(),
         ts,
     };
-
-    // Fire-and-forget telemetry: publish to oos.bench.debug, then persist.
-    if let Ok(bytes) = serde_json::to_vec(&event) {
-        let _ = client.publish(DEBUG_SUBJECT, bytes.into()).await;
-    }
+    ui.tool(event.clone());
     event_log.log(&event);
+
+    Reply::Done { text: reply_text }
 }
 
 // Route a request, applying the deadline. Returns None for an unknown subject

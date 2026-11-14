@@ -1,5 +1,6 @@
-# Baut die Bench unter Linux, Windows und macOS (als .app), legt die Programme als Artefakte ab
-# und hängt sie bei einem Tag v* an ein GitHub-Release.
+# Baut die Bench (mit oosmem im Prozess) und die Brücke bench-nats unter Linux,
+# Windows und macOS (als .app), legt die Programme als Artefakte ab und hängt
+# sie bei einem Tag v* an ein GitHub-Release.
 #
 # carbon-egui ist eine Pfad-Abhängigkeit (../carbon_egui). Darum werden beide
 # Repos nebeneinander ausgecheckt: bench/ und carbon_egui/. carbon_egui ist
@@ -31,15 +32,19 @@ jobs:
         include:
           - name: Linux
             os: ubuntu-24.04
-            binary: bench
+            binaries: |
+              bench/target/release/bench
+              bench/target/release/bench-nats
             artifact: bench-linux-x86_64
           - name: Windows
             os: windows-latest
-            binary: bench.exe
+            binaries: |
+              bench/target/release/bench.exe
+              bench/target/release/bench-nats.exe
             artifact: bench-windows-x86_64
           - name: macOS
             os: macos-latest
-            binary: bundle/bench-macos-arm64.zip
+            binaries: bench/target/release/bundle/bench-macos-arm64.zip
             artifact: bench-macos-arm64
 
     steps:
@@ -76,12 +81,12 @@ jobs:
 
       - name: Tests
         working-directory: bench
-        run: cargo test --locked
+        run: cargo test --workspace --locked
 
       - name: Release-Build
         if: runner.os != 'macOS'
         working-directory: bench
-        run: cargo build --release --locked
+        run: cargo build --release --workspace --locked
 
       # macOS: Release-Build + .app (ad-hoc signiert), gezippt mit ditto
       - name: Release-Build als .app
@@ -93,7 +98,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact }}
-          path: bench/target/release/${{ matrix.binary }}
+          path: ${{ matrix.binaries }}
           if-no-files-found: error
 
   release:
@@ -111,9 +116,9 @@ jobs:
       - name: Archive packen
         working-directory: dist
         run: |
-          chmod +x bench-linux-x86_64/bench
-          tar -czf bench-linux-x86_64.tar.gz -C bench-linux-x86_64 bench
-          (cd bench-windows-x86_64 && zip -q ../bench-windows-x86_64.zip bench.exe)
+          chmod +x bench-linux-x86_64/*
+          tar -czf bench-linux-x86_64.tar.gz -C bench-linux-x86_64 bench bench-nats
+          (cd bench-windows-x86_64 && zip -q ../bench-windows-x86_64.zip bench.exe bench-nats.exe)
           cp bench-macos-arm64/bench-macos-arm64.zip .
 
       - name: GitHub-Release

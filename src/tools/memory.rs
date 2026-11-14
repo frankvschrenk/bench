@@ -1,13 +1,12 @@
 //! Long-term memory handlers (bench.memory.*).
 //
-// Persistence lives in oosmem (Go service, NATS-only) under oos.cmd.mem.*.
-// This module is a thin adapter: it shapes args into oosmem payloads and
-// returns oosmem's reply verbatim. No DB. Faithful port of the Bun memory.ts.
+// Persistence lives in oosmem (in-process since 14.11.2026; the operation
+// names are still the former oos.cmd.mem.* subjects). This module is a thin
+// adapter: it shapes args into oosmem payloads and returns oosmem's reply
+// verbatim. No DB. Faithful port of the Bun memory.ts.
 //
 // oosmem replies always carry an `error` field (empty on success); a non-empty
-// error becomes a tool error, otherwise the whole reply passes through. The
-// outbound request rides ctx.nats (the dispatcher's own client) — oosmem
-// listens on the bare oos.cmd.mem.* subjects, so no instance prefix is added.
+// error becomes a tool error, otherwise the whole reply passes through.
 
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -15,10 +14,9 @@ use serde_json::{json, Value};
 use crate::ctx::Ctx;
 use crate::error::ToolError;
 
-// Must stay in sync with apps/oosmem/internal/server/subjects.go.
-pub(crate) const SUBJECT_APPEND: &str = "oos.cmd.mem.event.append";
-const SUBJECT_SEARCH: &str = "oos.cmd.mem.search";
-pub(crate) const SUBJECT_STREAM_EVENTS: &str = "oos.cmd.mem.stream.events";
+pub(crate) const SUBJECT_APPEND: &str = oosmem::SUBJECT_APPEND;
+const SUBJECT_SEARCH: &str = oosmem::SUBJECT_SEARCH;
+pub(crate) const SUBJECT_STREAM_EVENTS: &str = oosmem::SUBJECT_STREAM_EVENTS;
 
 const VALID_TRACES: [&str; 4] = ["space", "time", "action", "unknown"];
 
@@ -94,16 +92,12 @@ async fn list(args: Value, ctx: &Ctx) -> Result<Value, ToolError> {
     request(ctx, SUBJECT_STREAM_EVENTS, payload, "memory_list").await
 }
 
-// Request-reply to oosmem and unwrap. A non-empty `error` field in the reply is
+// Call the memory store and unwrap. A non-empty `error` field in the reply is
 // surfaced as a tool error; otherwise the parsed reply is returned verbatim.
 pub(crate) async fn request(ctx: &Ctx, subject: &str, payload: Value, label: &str) -> Result<Value, ToolError> {
     let bytes = serde_json::to_vec(&payload)?;
-    let msg = ctx
-        .nats
-        .request(subject.to_string(), bytes.into())
-        .await
-        .map_err(|e| ToolError::Msg(format!("{label}: {e}")))?;
-    let reply: Value = serde_json::from_slice(&msg.payload)
+    let reply = ctx.memory()?.call(subject, &bytes).await;
+    let reply: Value = serde_json::from_slice(&reply)
         .map_err(|e| ToolError::Msg(format!("{label}: invalid reply: {e}")))?;
     if let Some(err) = reply.get("error").and_then(Value::as_str) {
         if !err.is_empty() {

@@ -9,18 +9,15 @@
 //   HTTP  http://localhost:5556  /.well-known/openid-configuration, /jwks, /auth, /token
 //         (Issuer einstellbar: Einstellungen → Allgemein → „Issuer-URL des Dev-IdP“;
 //         anderer Host als localhost = lauscht auf 0.0.0.0, für Testrechner im Netz)
-//   NATS  oos.cmd.oosiam.user.{list,create,set_groups,set_password,delete}
-//   KV    oos-iam/user  {issuerUrl, clientId, redirectUri}
 // Benutzer liegen in Postgres (Schema iam in der App-DB aus Settings →
 // Database), der Signierschlüssel im Datenordner der Bench.
 //
 // Die Bench-Oberfläche (Users) spricht über die Funktionen unten direkt
-// mit dem Store; die NATS-Subjects bleiben für andere Werkzeuge bestehen.
+// mit dem Store. Die NATS-Verwaltung (oos.cmd.oosiam.*) und der KV-Eintrag
+// oos-iam/user sind seit 14.11.2026 weg – außer der Bench nutzte sie niemand.
 
 mod jwt;
 mod keys;
-mod kv;
-mod nats;
 mod pkce;
 mod server;
 pub mod store;
@@ -38,9 +35,6 @@ use crate::settings::BenchSettings;
 
 const DEFAULT_ISSUER: &str = "http://localhost:5556";
 const DEFAULT_PORT: u16 = 5556;
-/// Standard-Client für Desktop-Apps (oos); veröffentlicht im KV.
-const CLIENT_ID: &str = "oos-desktop";
-const REDIRECT_URI: &str = "http://localhost:5557/callback";
 const TOKEN_TTL_SEC: u64 = 8 * 3600;
 const CODE_TTL_SEC: u64 = 300;
 /// App-DB, falls in Settings keine eingetragen ist (wie früher oosiam).
@@ -92,7 +86,7 @@ fn bind_host(host: &str) -> &'static str {
     }
 }
 
-/// Startet den IdP: Postgres, Schema, erster Admin, Schlüssel, HTTP, NATS, KV.
+/// Startet den IdP: Postgres, Schema, erster Admin, Schlüssel, HTTP.
 /// Läuft einmal beim Hochfahren; Änderungen an den Settings brauchen einen
 /// Neustart der Bench. Fehler legen nur den IdP still, nie die Bench.
 pub async fn start(settings: BenchSettings, key_path: PathBuf, state: Arc<IamState>) {
@@ -118,7 +112,7 @@ pub async fn start(settings: BenchSettings, key_path: PathBuf, state: Arc<IamSta
         return set_status(format!("aus – Schema iam: {e}")).await;
     }
     match store::seed_admin_if_empty(&pool).await {
-        // Passwort nur einmal auf stderr, nie über NATS oder ins Fenster-Log
+        // Passwort nur einmal auf stderr, nie ins Fenster-Log
         Ok(Some((email, password))) => {
             eprintln!("\n[bench/iam] erster Admin: {email} / {password}");
             eprintln!("[bench/iam] Passwort wird nur jetzt angezeigt – anmelden und ändern.\n");
@@ -162,28 +156,7 @@ pub async fn start(settings: BenchSettings, key_path: PathBuf, state: Arc<IamSta
         });
     }
 
-    // NATS-Verwaltung + KV – über den ersten konfigurierten Server
-    let nats_note = match settings.servers.first() {
-        None => "ohne NATS (kein Server eingetragen)".to_string(),
-        Some(srv) => match async_nats::connect(&srv.url).await {
-            Err(e) => format!("ohne NATS ({}: {e})", srv.url),
-            Ok(client) => {
-                if let Err(e) = nats::serve(client.clone(), pool.clone()).await {
-                    eprintln!("[bench/iam] NATS-Subjects: {e}");
-                }
-                let cfg = kv::IamClientConfig {
-                    issuer_url: issuer.clone(),
-                    client_id: CLIENT_ID.into(),
-                    redirect_uri: REDIRECT_URI.into(),
-                };
-                if let Err(e) = kv::publish_config(&client, &cfg).await {
-                    eprintln!("[bench/iam] KV oos-iam: {e}");
-                }
-                format!("NATS {}", srv.name)
-            }
-        },
-    };
-    set_status(format!("läuft – {issuer} (lauscht {bind}:{port}) · {db} · {nats_note} · kid {kid}")).await;
+    set_status(format!("läuft – {issuer} (lauscht {bind}:{port}) · {db} · kid {kid}")).await;
 }
 
 // ── Funktionen für die Users-Ansicht ─────────────────────────────────
