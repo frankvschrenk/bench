@@ -13,14 +13,14 @@ use std::sync::Arc;
 
 use carbon_egui::theme::color;
 use carbon_egui::{Header, Icon, SideNav, Tag, TagColor, TagSize, Toast, Toasts};
-use egui::{vec2, Frame, Margin, RichText};
+use egui::{vec2, Frame, Margin};
 use tokio::runtime::Runtime;
 
 use crate::boot::Backend;
 use crate::observe::{AppState, UiEvent};
 use crate::settings::BenchSettings;
 use feed::{FeedAction, LogsView, ToolsView};
-use settings_view::{DatabasePage, GeneralPage, RootsPage, ServersPage};
+use settings_view::{DatabasePage, GeneralPage, InterfacePage, RootsPage};
 use users::UsersView;
 
 const PAGE_TOOLS: usize = 0;
@@ -28,7 +28,7 @@ const PAGE_LOGS: usize = 1;
 const PAGE_USERS: usize = 2;
 const PAGE_GENERAL: usize = 3;
 const PAGE_DATABASE: usize = 4;
-const PAGE_SERVERS: usize = 5;
+const PAGE_INTERFACE: usize = 5;
 const PAGE_ROOTS: usize = 6;
 
 const PAGES: [(Option<Icon>, &str); 7] = [
@@ -37,7 +37,7 @@ const PAGES: [(Option<Icon>, &str); 7] = [
     (Some(Icon::User), "Benutzer"),
     (Some(Icon::Settings), "Allgemein"),
     (Some(Icon::Document), "Datenbank"),
-    (Some(Icon::Send), "NATS-Server"),
+    (Some(Icon::Send), "Schnittstelle"),
     (Some(Icon::Folder), "Freigegebene Ordner"),
 ];
 
@@ -48,7 +48,8 @@ pub struct BenchApp {
     events: Receiver<UiEvent>,
     /// The window's copy of the settings (the backend holds the live one).
     settings: BenchSettings,
-    statuses: HashMap<String, bool>,
+    /// Local services (Schnittstelle, Gedächtnis): name → (detail, up).
+    statuses: HashMap<String, (String, bool)>,
 
     page: usize,
     menu_open: bool,
@@ -58,7 +59,7 @@ pub struct BenchApp {
     users: UsersView,
     general: GeneralPage,
     database: DatabasePage,
-    servers: ServersPage,
+    interface: InterfacePage,
     roots: RootsPage,
     toasts: Toasts,
     started: std::time::Instant,
@@ -67,7 +68,7 @@ pub struct BenchApp {
 
 impl BenchApp {
     pub fn new(runtime: Runtime, backend: Backend) -> Self {
-        let Backend { state, iam, events, settings } = backend;
+        let Backend { state, iam, events, settings, api_token } = backend;
         let mut app = Self {
             runtime,
             state,
@@ -82,7 +83,7 @@ impl BenchApp {
             users: UsersView::new(iam),
             general: GeneralPage::default(),
             database: DatabasePage::default(),
-            servers: ServersPage::default(),
+            interface: InterfacePage::new(api_token),
             roots: RootsPage::default(),
             toasts: Toasts::default().offset(vec2(16.0, 64.0)),
             started: std::time::Instant::now(),
@@ -98,6 +99,7 @@ impl BenchApp {
     fn reset_drafts(&mut self) {
         self.general.reset(&self.settings);
         self.database.reset(&self.settings);
+        self.interface.reset(&self.settings);
     }
 
     // Drain everything the backend sent since the last frame. Paused feeds
@@ -108,7 +110,7 @@ impl BenchApp {
                 UiEvent::Tool(e) if !self.paused => self.tools.push(e),
                 UiEvent::Log(r) if !self.paused => self.logs.push(r),
                 UiEvent::Status(s) => {
-                    self.statuses.insert(s.name, s.connected);
+                    self.statuses.insert(s.name, (s.url, s.connected));
                 }
                 _ => {}
             }
@@ -116,13 +118,20 @@ impl BenchApp {
     }
 
     fn save(&mut self, next: BenchSettings) {
-        let otlp_changed = next.otlp_port != self.settings.otlp_port;
+        let o = &self.settings;
+        let restart = next.otlp_port != o.otlp_port
+            || next.api_port != o.api_port
+            || next.api_network != o.api_network
+            || next.memory_dir != o.memory_dir
+            || next.llm_url != o.llm_url
+            || next.llm_model != o.llm_model
+            || next.iam_issuer != o.iam_issuer;
         match self.runtime.block_on(self.state.save_settings(next.clone())) {
             Ok(()) => {
                 self.settings = next;
                 self.reset_drafts();
-                let toast = Toast::success("Gespeichert").subtitle("NATS wird neu verbunden.");
-                self.toasts.add(if otlp_changed { toast.subtitle("Der neue OTLP-Port gilt nach einem Neustart.") } else { toast });
+                let toast = Toast::success("Gespeichert");
+                self.toasts.add(if restart { toast.subtitle("Ports, Gedächtnis und IdP gelten nach einem Neustart der Bench.") } else { toast });
             }
             Err(e) => self.toasts.add(Toast::error("Speichern fehlgeschlagen").subtitle(e)),
         }
@@ -159,17 +168,16 @@ impl BenchApp {
                             .size(TagSize::Small)
                             .show(ui);
                     }
-                    if self.settings.servers.is_empty() {
-                        ui.label(RichText::new("Kein NATS-Server eingetragen").size(12.0).color(color::TEXT_HELPER));
-                    }
-                    for srv in &self.settings.servers {
-                        let up = self.statuses.get(&srv.name).copied().unwrap_or(false);
-                        Tag::new(&srv.name)
-                            .color(if up { TagColor::Green } else { TagColor::Red })
+                    let mut names: Vec<&String> = self.statuses.keys().collect();
+                    names.sort();
+                    for name in names {
+                        let (detail, up) = &self.statuses[name];
+                        Tag::new(name)
+                            .color(if *up { TagColor::Green } else { TagColor::Red })
                             .size(TagSize::Small)
                             .show(ui)
                             .response
-                            .on_hover_text(format!("{} – {}", srv.url, if up { "verbunden" } else { "getrennt" }));
+                            .on_hover_text(detail);
                     }
                 });
             });
@@ -217,13 +225,12 @@ impl eframe::App for BenchApp {
                     PAGE_USERS => self.users.show(ui, &self.runtime, &mut self.toasts),
                     page => {
                         let settings = self.settings.clone();
-                        let statuses = &self.statuses;
                         let next = egui::ScrollArea::vertical()
                             .auto_shrink(false)
                             .show(ui, |ui| match page {
                                 PAGE_GENERAL => self.general.show(ui, &settings),
                                 PAGE_DATABASE => self.database.show(ui, &settings),
-                                PAGE_SERVERS => self.servers.show(ui, &settings, statuses),
+                                PAGE_INTERFACE => self.interface.show(ui, &settings),
                                 PAGE_ROOTS => self.roots.show(ui, &settings),
                                 _ => None,
                             })

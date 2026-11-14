@@ -1,12 +1,10 @@
-//! The NATS server: open the store, subscribe the seven oos.cmd.mem.* subjects
-//! as request-reply responders, run a periodic snapshot loop, and shut down
-//! cleanly on SIGINT/SIGTERM with a final snapshot. Port of the Go `server`
-//! package (server.go + handlers.go).
+//! The memory store's request handlers and the in-process entry point
+//! (`Memory`). Port of the Go `server` package (server.go + handlers.go).
 //
-// Subjects are queue-subscribed under the group "oosmem": with a single
-// instance this behaves like a plain subscription, but it guarantees that if a
-// second instance is ever started by mistake, append is not executed twice
-// (the duplicate-write fan-out that bit oosai). Handlers are thin: decode,
+// Until 14.11.2026 oosmem was its own process answering oos.cmd.mem.* over
+// NATS; it now lives inside the bench. The subject names stay as operation
+// keys and the JSON payloads are unchanged. A lock file keeps a second process
+// off the same store. Handlers are thin: decode,
 // call into store/vector/synth, encode the reply. Per-request failures are
 // folded into the reply's `error` field, never propagated.
 
@@ -14,7 +12,6 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use chrono::Utc;
-use futures::StreamExt;
 use serde::Serialize;
 
 use crate::format::{Event, EventTrace, Ref};
@@ -32,7 +29,8 @@ pub const SUBJECT_EPISODE_LOOKUP: &str = "oos.cmd.mem.episode.lookup";
 pub const SUBJECT_EPISODE_SUMMARIZE: &str = "oos.cmd.mem.episode.summarize";
 pub const SUBJECT_HEALTH: &str = "oos.cmd.mem.health";
 
-const ALL_SUBJECTS: &[&str] = &[
+/// Every operation `Memory::call` understands.
+pub const OPERATIONS: &[&str] = &[
     SUBJECT_APPEND,
     SUBJECT_BYID,
     SUBJECT_STREAM_EVENTS,
@@ -41,8 +39,6 @@ const ALL_SUBJECTS: &[&str] = &[
     SUBJECT_EPISODE_SUMMARIZE,
     SUBJECT_HEALTH,
 ];
-
-const QUEUE_GROUP: &str = "oosmem";
 
 // Search caps mirror the Go server: default k, hard ceiling, and the episode
 // over-fetch multiplier (several events of one stream surface per query, so we
@@ -53,12 +49,11 @@ const EPISODE_K_DEFAULT: usize = 5;
 const EPISODE_K_CAP: usize = 20;
 const EPISODE_OVERFETCH: usize = 6;
 
-/// Boot-time configuration, assembled by main from flags + dim resolution.
-pub struct ServerConfig {
+/// How to open the store. `dim` only applies to a fresh store; an existing
+/// store's stored dim always wins. Empty `llm_url` disables episode.summarize.
+pub struct MemoryConfig {
     pub data_dir: String,
-    pub nats_url: String,
     pub dim: u16,
-    pub snapshot_every: Duration,
     pub llm_url: String,
     pub llm_model: String,
     pub llm_timeout: Duration,
@@ -384,117 +379,128 @@ fn build_episode(store: &Store, stream_id: u64) -> Episode {
     ep
 }
 
-/// Open the store, connect to NATS, subscribe every subject, run the snapshot
-/// loop, and block until SIGINT/SIGTERM. Takes a final snapshot on the way out.
-pub async fn run(cfg: ServerConfig) -> anyhow::Result<()> {
-    let (store, report) = Store::open_or_create(&cfg.data_dir, cfg.dim)?;
-    let dim = store.vector_dim();
-    eprintln!(
-        "oosmem: loaded {} events, {} streams, {} inverse-refs, repaired {} idx (dim={dim})",
-        report.events_loaded, report.streams_built, report.inverse_refs, report.repaired_idx
-    );
-
-    let summ = if cfg.llm_url.is_empty() {
-        None
-    } else {
-        eprintln!("oosmem: summarizer enabled (url={}, model={})", cfg.llm_url, cfg.llm_model);
-        Some(Arc::new(Summarizer::new(
-            OllamaClient::new(&cfg.llm_url, &cfg.llm_model, cfg.llm_timeout),
-            &cfg.llm_model,
-        )))
-    };
-
-    let store = Arc::new(Mutex::new(store));
-    let handlers = Arc::new(Handlers { store: store.clone(), dim, summ, llm_model: cfg.llm_model.clone() });
-
-    let nats_url = if cfg.nats_url.is_empty() { "nats://127.0.0.1:4222".to_string() } else { cfg.nats_url.clone() };
-    let client = async_nats::ConnectOptions::new().name("oosmem").connect(&nats_url).await?;
-
-    for &subj in ALL_SUBJECTS {
-        let sub = client.queue_subscribe(subj, QUEUE_GROUP.to_string()).await?;
-        spawn_responder(handlers.clone(), client.clone(), sub, subj);
-    }
-    eprintln!("oosmem: ready on {nats_url}, subjects {ALL_SUBJECTS:?}");
-
-    // Snapshot loop + signal wait. The first interval tick fires immediately;
-    // consume it so we do not snapshot the instant we boot.
-    let mut interval = tokio::time::interval(cfg.snapshot_every);
-    interval.tick().await;
-    let mut terminate = Terminate::new()?;
-    loop {
-        tokio::select! {
-            _ = tokio::signal::ctrl_c() => break,
-            _ = terminate.recv() => break,
-            _ = interval.tick() => {
-                if let Err(e) = store.lock().unwrap().snapshot() {
-                    eprintln!("oosmem: snapshot failed: {e}");
-                }
-            }
-        }
-    }
-
-    eprintln!("oosmem: shutting down");
-    let _ = client.flush().await;
-    store.lock().unwrap().snapshot()?;
-    Ok(())
-}
-
-// Spawn a task that answers every request on one subscriber by dispatching to
-// the handler for `subject` and publishing the reply to msg.reply.
-fn spawn_responder(
+/// The memory store, opened in-process. Callers hand an operation name (the
+/// former oos.cmd.mem.* subject, kept as the key so the wire payloads stay
+/// unchanged) and a JSON payload, and get the JSON reply back -- exactly what
+/// the NATS responder used to publish.
+pub struct Memory {
     handlers: Arc<Handlers>,
-    client: async_nats::Client,
-    mut sub: async_nats::Subscriber,
-    subject: &'static str,
-) {
-    tokio::spawn(async move {
-        while let Some(msg) = sub.next().await {
-            let reply_to = match msg.reply {
-                Some(r) => r,
-                None => continue, // not a request; nothing to answer
-            };
-            let body = handlers.dispatch(subject, &msg.payload).await;
-            if let Err(e) = client.publish(reply_to, body.into()).await {
-                eprintln!("oosmem: respond failed on {subject}: {e}");
-            }
+    data_dir: String,
+    // Held for the lifetime of the store: a second process (an old oosmem
+    // under launchd, a second bench) must not write the same files.
+    _lock: std::fs::File,
+}
+
+impl Memory {
+    /// Open (or create) the store and set up the optional summarizer.
+    pub fn open(cfg: MemoryConfig) -> anyhow::Result<Memory> {
+        std::fs::create_dir_all(&cfg.data_dir)?;
+        let lock = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(std::path::Path::new(&cfg.data_dir).join("oosmem.lock"))?;
+        match lock.try_lock() {
+            Ok(()) => {}
+            Err(std::fs::TryLockError::WouldBlock) => anyhow::bail!(
+                "{} wird schon von einem anderen Prozess benutzt (läuft noch der alte oosmem-Dienst?)",
+                cfg.data_dir
+            ),
+            Err(std::fs::TryLockError::Error(e)) => return Err(e.into()),
         }
-    });
+
+        let (store, report) = Store::open_or_create(&cfg.data_dir, cfg.dim)?;
+        let dim = store.vector_dim();
+        eprintln!(
+            "oosmem: loaded {} events, {} streams, {} inverse-refs, repaired {} idx (dim={dim})",
+            report.events_loaded, report.streams_built, report.inverse_refs, report.repaired_idx
+        );
+
+        let summ = if cfg.llm_url.is_empty() {
+            None
+        } else {
+            eprintln!("oosmem: summarizer enabled (url={}, model={})", cfg.llm_url, cfg.llm_model);
+            Some(Arc::new(Summarizer::new(
+                OllamaClient::new(&cfg.llm_url, &cfg.llm_model, cfg.llm_timeout),
+                &cfg.llm_model,
+            )))
+        };
+
+        let store = Arc::new(Mutex::new(store));
+        let handlers = Arc::new(Handlers { store, dim, summ, llm_model: cfg.llm_model.clone() });
+        Ok(Memory { handlers, data_dir: cfg.data_dir, _lock: lock })
+    }
+
+    /// Run one operation (see the SUBJECT_* constants) and return the JSON reply.
+    /// Failures are folded into the reply's `error` field, never returned.
+    pub async fn call(&self, op: &str, payload: &[u8]) -> Vec<u8> {
+        self.handlers.dispatch(op, payload).await
+    }
+
+    /// Rewrite the header with current counts. Events are durable per append;
+    /// this only keeps meta.bin fresh (periodically and on shutdown).
+    pub fn snapshot(&self) -> anyhow::Result<()> {
+        self.handlers.store.lock().unwrap().snapshot()?;
+        Ok(())
+    }
+
+    /// Folder the store lives in.
+    pub fn data_dir(&self) -> &str {
+        &self.data_dir
+    }
 }
 
-/// Shutdown request besides Ctrl-C: SIGTERM on Unix (launchd, kill), on
-/// Windows Ctrl-Break / console close / shutdown (taskkill, Windows logging off).
-#[cfg(unix)]
-struct Terminate(tokio::signal::unix::Signal);
-
-#[cfg(unix)]
-impl Terminate {
-    fn new() -> std::io::Result<Self> {
-        use tokio::signal::unix::{signal, SignalKind};
-        Ok(Self(signal(SignalKind::terminate())?))
-    }
-    async fn recv(&mut self) {
-        self.0.recv().await;
-    }
-}
-
-#[cfg(windows)]
-struct Terminate {
-    brk: tokio::signal::windows::CtrlBreak,
-    close: tokio::signal::windows::CtrlClose,
-    shutdown: tokio::signal::windows::CtrlShutdown,
-}
-
-#[cfg(windows)]
-impl Terminate {
-    fn new() -> std::io::Result<Self> {
-        use tokio::signal::windows;
-        Ok(Self { brk: windows::ctrl_break()?, close: windows::ctrl_close()?, shutdown: windows::ctrl_shutdown()? })
-    }
-    async fn recv(&mut self) {
-        tokio::select! {
-            _ = self.brk.recv() => {}
-            _ = self.close.recv() => {}
-            _ = self.shutdown.recv() => {}
+impl Drop for Memory {
+    fn drop(&mut self) {
+        if let Err(e) = self.snapshot() {
+            eprintln!("oosmem: final snapshot failed: {e}");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cfg(dir: &std::path::Path) -> MemoryConfig {
+        MemoryConfig {
+            data_dir: dir.to_string_lossy().into_owned(),
+            dim: 128,
+            llm_url: String::new(),
+            llm_model: String::new(),
+            llm_timeout: Duration::from_secs(1),
+        }
+    }
+
+    fn value(bytes: Vec<u8>) -> serde_json::Value {
+        serde_json::from_slice(&bytes).unwrap()
+    }
+
+    #[tokio::test]
+    async fn im_prozess_schreiben_lesen_und_sperre() {
+        let dir = std::env::temp_dir().join(format!("oosmem-test-{}-{}", std::process::id(), Utc::now().timestamp_nanos_opt().unwrap_or(0)));
+        {
+            let mem = Memory::open(cfg(&dir)).unwrap();
+            // A second open on the same folder must be refused while the first lives.
+            assert!(Memory::open(cfg(&dir)).is_err());
+
+            let r = value(mem.call(SUBJECT_APPEND, br#"{"stream_id":7,"content":"Bench baut mit cargo build","topic":"bauen","trace":"action"}"#).await);
+            assert!(r.get("error").is_none(), "{r}");
+            let id = r["event_id"].as_u64().unwrap();
+
+            let h = value(mem.call(SUBJECT_HEALTH, b"{}").await);
+            assert_eq!(h["events"], 1);
+
+            let l = value(mem.call(SUBJECT_STREAM_EVENTS, br#"{"stream_id":7,"limit":5}"#).await);
+            assert_eq!(l["events"][0]["id"].as_u64(), Some(id), "{l}");
+
+            let u = value(mem.call("oos.cmd.mem.nope", b"{}").await);
+            assert!(u["error"].as_str().unwrap().contains("unknown"));
+        }
+        // Dropped: lock released, the event survives a reopen.
+        let mem = Memory::open(cfg(&dir)).unwrap();
+        assert_eq!(value(mem.call(SUBJECT_HEALTH, b"{}").await)["events"], 1);
+        drop(mem);
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

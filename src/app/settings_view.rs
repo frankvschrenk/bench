@@ -1,17 +1,15 @@
-//! Settings pages: General, Database, NATS servers, allowed roots.
+//! Settings pages: General, Database, tool interface, allowed roots.
 //
 // Every page edits a draft and hands a complete BenchSettings back when the
-// user saves; the app persists it and triggers the NATS reconnect. Servers and
-// roots save on every add/remove, as in the Tauri bench.
+// user saves; the app persists it and applies it. Roots save on every
+// add/remove, as in the Tauri bench.
 
-use std::collections::HashMap;
-
-use carbon_egui::{Button, ButtonKind, ButtonSize, Column, DataTable, Form, Icon, TableAction, TableSize, Tag, TagColor, TagSize, TextInput};
+use carbon_egui::{Button, ButtonKind, ButtonSize, Checkbox, Column, DataTable, Form, Icon, TableAction, TableSize, TextArea, TextInput};
 use egui::Ui;
 
 use super::style;
 use crate::db::rewrite_database;
-use crate::settings::{AllowedRoot, BenchSettings, NatsServer};
+use crate::settings::{AllowedRoot, BenchSettings};
 
 const FORM_WIDTH: f32 = 640.0;
 
@@ -27,6 +25,9 @@ pub struct GeneralPage {
     instance_name: String,
     otlp_port: String,
     iam_issuer: String,
+    memory_dir: String,
+    llm_url: String,
+    llm_model: String,
 }
 
 impl GeneralPage {
@@ -34,6 +35,9 @@ impl GeneralPage {
         self.instance_name = s.instance_name.clone();
         self.otlp_port = s.otlp_port.to_string();
         self.iam_issuer = s.iam_issuer.clone();
+        self.memory_dir = s.memory_dir.clone();
+        self.llm_url = s.llm_url.clone();
+        self.llm_model = s.llm_model.clone();
     }
 
     pub fn show(&mut self, ui: &mut Ui, s: &BenchSettings) -> Option<BenchSettings> {
@@ -48,7 +52,7 @@ impl GeneralPage {
                     TextInput::new(&mut self.instance_name)
                         .label("Instanzname")
                         .placeholder("macos")
-                        .helper_text("bench-nats erreicht diese Bench gezielt über „{name}.bench.*“."),
+                        .helper_text("Name dieser Bench (z. B. für set_target und targets.json von bench-nats)."),
                 )
             });
             form.section("Lokale Dienste");
@@ -73,6 +77,32 @@ impl GeneralPage {
                 }
                 ui.add(input)
             });
+            form.section("Gedächtnis (oosmem)");
+            form.full(|ui| {
+                let default = crate::settings::memory_dir(&BenchSettings::default());
+                ui.add(
+                    TextInput::new(&mut self.memory_dir)
+                        .label("Ordner")
+                        .placeholder(default.display().to_string())
+                        .helper_text("Handbuch, Notizen und Suche. Leer = Standardordner (derselbe wie beim früheren oosmem-Dienst). Wirkt nach einem Neustart."),
+                )
+            });
+            form.full(|ui| {
+                ui.add(
+                    TextInput::new(&mut self.llm_url)
+                        .label("Ollama-URL für Zusammenfassungen")
+                        .placeholder("http://127.0.0.1:11434")
+                        .helper_text("Leer = keine Zusammenfassungen (episode.summarize). Wirkt nach einem Neustart."),
+                )
+            });
+            form.full(|ui| {
+                ui.add(
+                    TextInput::new(&mut self.llm_model)
+                        .label("Modell")
+                        .placeholder("gemma4:e4b")
+                        .helper_text("MLX-Modelle (…-mlx) laufen nur auf dem Mac."),
+                )
+            });
             form.full(|ui| save = save_button(ui, port.is_some() && issuer_ok));
         });
         let port = port?;
@@ -80,6 +110,9 @@ impl GeneralPage {
             instance_name: self.instance_name.trim().to_string(),
             otlp_port: port,
             iam_issuer: issuer,
+            memory_dir: self.memory_dir.trim().to_string(),
+            llm_url: self.llm_url.trim().to_string(),
+            llm_model: self.llm_model.trim().to_string(),
             ..s.clone()
         })
     }
@@ -144,95 +177,95 @@ impl DatabasePage {
     }
 }
 
-// ─── NATS servers ───────────────────────────────────────────────
+// ─── Tool interface ─────────────────────────────────────────────
 
-pub struct ServersPage {
-    name: String,
-    url: String,
+pub struct InterfacePage {
+    port: String,
+    network: bool,
+    token: String,
 }
 
-impl Default for ServersPage {
-    fn default() -> Self {
-        Self {
-            name: String::new(),
-            url: "nats://localhost:4222".into(),
-        }
+impl InterfacePage {
+    pub fn new(token: String) -> Self {
+        Self { port: String::new(), network: false, token }
     }
-}
 
-impl ServersPage {
-    pub fn show(&mut self, ui: &mut Ui, s: &BenchSettings, statuses: &HashMap<String, bool>) -> Option<BenchSettings> {
+    pub fn reset(&mut self, s: &BenchSettings) {
+        self.port = s.api_port.to_string();
+        self.network = s.api_network;
+    }
+
+    pub fn show(&mut self, ui: &mut Ui, s: &BenchSettings) -> Option<BenchSettings> {
         style::page_title(
             ui,
-            "NATS-Server",
-            "Server, mit denen sich die Bench verbindet. Speichern verbindet sofort neu.",
+            "Schnittstelle",
+            "Claude erreicht die Bench über MCP (HTTP). Port und Netzmodus gelten nach einem Neustart.",
         );
-        let mut next = None;
-
-        let columns = [Column::new("Name").width(180.0), Column::new("URL").width(300.0), Column::new("Status")];
-        let remove = [TableAction::icon_only(Icon::TrashCan, "Entfernen")];
-        let r = DataTable::new("servers", &columns, s.servers.len())
-            .size(TableSize::Medium)
-            .width(FORM_WIDTH + 160.0)
-            .row_buttons(&remove)
-            .row_actions_always(true)
-            .cell_ui(|ui, row, col| {
-                if col != 2 {
-                    return false;
+        let port = self.port.trim().parse::<u16>().ok().filter(|p| *p >= 1024);
+        let mut token = self.token.clone();
+        let mut snippets = claude_snippets(s.api_port, &self.token);
+        let mut save = false;
+        Form::new().width(FORM_WIDTH).show(ui, |form| {
+            form.full(|ui| {
+                let mut input = TextInput::new(&mut self.port)
+                    .label("Port")
+                    .placeholder("4320")
+                    .width(200.0)
+                    .helper_text("/mcp (MCP über Streamable HTTP), /call/<operation> (für bench-nats), /health.");
+                if port.is_none() {
+                    input = input.invalid("Port zwischen 1024 und 65535");
                 }
-                let up = statuses.get(&s.servers[row].name).copied().unwrap_or(false);
-                Tag::new(if up { "verbunden" } else { "getrennt" })
-                    .color(if up { TagColor::Green } else { TagColor::Red })
-                    .size(TagSize::Small)
-                    .show(ui);
-                true
-            })
-            .empty_state("Keine Server", "Unten einen NATS-Server hinzufügen.")
-            .show(ui, |row, col| {
-                let srv = &s.servers[row];
-                match col {
-                    0 => srv.name.clone(),
-                    1 => srv.url.clone(),
-                    _ => String::new(),
-                }
-            });
-        if let Some((row, _)) = r.row_button {
-            let mut servers = s.servers.clone();
-            servers.remove(row);
-            next = Some(BenchSettings { servers, ..s.clone() });
-        }
-
-        ui.add_space(32.0);
-        let (name, url) = (self.name.trim().to_string(), self.url.trim().to_string());
-        let mut add = false;
-        Form::new().columns(2).width(FORM_WIDTH).show(ui, |form| {
-            form.section("Server hinzufügen");
-            form.row(|row| {
-                row.cell(|ui| ui.add(TextInput::new(&mut self.name).label("Name").placeholder("macos-local")));
-                row.cell(|ui| ui.add(TextInput::new(&mut self.url).label("URL").placeholder("nats://localhost:4222")));
+                ui.add(input)
             });
             form.full(|ui| {
-                add = ui
-                    .add(
-                        Button::new("Hinzufügen")
-                            .icon(Icon::Add)
-                            .kind(ButtonKind::Tertiary)
-                            .size(ButtonSize::Medium)
-                            .disabled(name.is_empty() || url.is_empty()),
-                    )
-                    .clicked();
+                ui.add(Checkbox::new(&mut self.network, "Im Netz erreichbar (lauscht auf 0.0.0.0 statt 127.0.0.1)"))
             });
+            form.section("Zugang");
+            form.full(|ui| {
+                ui.add(
+                    TextInput::new(&mut token)
+                        .label("Token")
+                        .read_only(true)
+                        .password(true)
+                        .id_salt("api-token")
+                        .helper_text("Bearer-Token für /mcp und /call. Liegt als api-token im Datenordner; bench-nats liest es dort auf diesem Rechner selbst."),
+                )
+            });
+            form.section("Claude einrichten");
+            form.full(|ui| {
+                ui.add(
+                    TextArea::new(&mut snippets)
+                        .label("Befehle und Konfiguration")
+                        .read_only(true)
+                        .monospace(true)
+                        .rows(16)
+                        .id_salt("claude-snippets"),
+                )
+            });
+            form.full(|ui| save = save_button(ui, port.is_some()));
         });
-        if add && !name.is_empty() && !url.is_empty() {
-            // Same name replaces the old entry, as in the Tauri bench.
-            let mut servers: Vec<NatsServer> = s.servers.iter().filter(|x| x.name != name).cloned().collect();
-            servers.push(NatsServer { name, url });
-            self.name.clear();
-            self.url = "nats://localhost:4222".into();
-            next = Some(BenchSettings { servers, ..s.clone() });
-        }
-        next
+        let port = port?;
+        save.then(|| BenchSettings { api_port: port, api_network: self.network, ..s.clone() })
     }
+}
+
+/// Copy-ready setup for Claude Code, Claude Desktop and other machines.
+fn claude_snippets(port: u16, token: &str) -> String {
+    let exe = if cfg!(windows) { "bench-nats.exe" } else { "bench-nats" };
+    let bridge = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.join(exe)))
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| exe.to_string());
+    let bridge_json = serde_json::to_string(&bridge).unwrap_or_default();
+    format!(
+        "# Claude Code (MCP direkt über HTTP)\n\
+claude mcp add --transport http bench http://127.0.0.1:{port}/mcp \\\n  --header \"Authorization: Bearer {token}\"\n\n\
+# Claude Desktop: claude_desktop_config.json → mcpServers\n\
+\"bench-nats\": {{ \"command\": {bridge_json} }}\n\n\
+# Andere Rechner für bench-nats: ~/.config/bench-nats/targets.json\n\
+{{ \"linux\": {{ \"url\": \"http://<rechner>:{port}\", \"token\": \"<token jener Bench>\" }} }}\n"
+    )
 }
 
 // ─── Allowed roots ──────────────────────────────────────────────

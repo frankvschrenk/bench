@@ -1,4 +1,4 @@
-//! Static manifest of every bench.* NATS subject.
+//! Static manifest of every bench.* operation.
 //!
 //! `list_operations` returns this verbatim so Claude can discover the
 //! whole bench surface (fs, search, exec, git, patch, pg, memory, task)
@@ -94,7 +94,7 @@ static OPERATIONS: &[Operation] = &[
     Operation { subject: "bench.pg.reset", description: "Drop and recreate the demo database.", input: InputSchema(&[]), output: "{ status, database }" },
 
     // -- memory ----------------------------------------------------
-    // Persistence lives in oosmem (oos.cmd.mem.*); the bench.memory.*
+    // Persistence lives in oosmem (in-process since 14.11.2026); the bench.memory.*
     // handlers in bench are thin adapters over its event model
     // (stream_id + trace). Events are immutable: no delete subject.
     Operation { subject: "bench.memory.write", description: "Append an event to a memory stream. Trace classifies the event as space (where), time (when), action (what was done), or unknown. Pass supersedes with the ids of events this one corrects or replaces: they drop out of search but stay in the stream history.", input: InputSchema(&[("stream_id", "number (positive integer)"), ("content", "string"), ("topic", "string (optional, <=200 chars)"), ("trace", "space|time|action|unknown (optional, default unknown)"), ("supersedes", "number[] (optional, event ids replaced by this one)")]), output: "{ event_id }" },

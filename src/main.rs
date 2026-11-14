@@ -1,9 +1,10 @@
 //! bench desktop app (egui + carbon-egui).
 //
-// bench's backend IS a NATS request-reply responder. Its tools touch the local
-// filesystem, spawn processes and reach Postgres, so the dispatcher boots with
-// the app and answers bench.* for the app's lifetime; the window is a status
-// surface fed over a channel, not the data path.
+// bench's backend answers tool calls (MCP over HTTP at /mcp, POST /call for
+// the bench-nats bridge). Its tools touch the local filesystem, spawn
+// processes, reach Postgres and the in-process memory store (oosmem), so the
+// interface boots with the app and answers bench.* for the app's lifetime; the
+// window is a status surface fed over a channel, not the data path.
 //
 // Port of the Tauri bench (onisin/apps/bench): the backend modules are carried
 // over unchanged where they never touched Tauri; settings, the window bridge
@@ -11,6 +12,7 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod api;
 mod app;
 mod boot;
 mod ctx;

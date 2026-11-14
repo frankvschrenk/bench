@@ -6,15 +6,13 @@ authors.workspace = true
 # oosmem carries the BSL-1.1 of onisin (it is domain logic, unlike the
 # generic bench-nats bridge which stays Apache-2.0).
 
-[[bin]]
-name = "oosmem"
-path = "src/main.rs"
+# Library only: the bench opens the store in-process (see src/lib.rs).
+[lib]
+path = "src/lib.rs"
 
 [dependencies]
 anyhow = { workspace = true }
-async-nats = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
-futures = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

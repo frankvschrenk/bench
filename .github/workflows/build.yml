@@ -1,6 +1,6 @@
-# Baut die Bench samt oosmem und bench-nats (Workspace) unter Linux, Windows und
-# macOS (als .app), legt die Programme als Artefakte ab und hängt sie bei einem
-# Tag v* an ein GitHub-Release.
+# Baut die Bench (mit oosmem im Prozess) und die Brücke bench-nats unter Linux,
+# Windows und macOS (als .app), legt die Programme als Artefakte ab und hängt
+# sie bei einem Tag v* an ein GitHub-Release.
 #
 # carbon-egui ist eine Pfad-Abhängigkeit (../carbon_egui). Darum werden beide
 # Repos nebeneinander ausgecheckt: bench/ und carbon_egui/. carbon_egui ist
@@ -34,14 +34,12 @@ jobs:
             os: ubuntu-24.04
             binaries: |
               bench/target/release/bench
-              bench/target/release/oosmem
               bench/target/release/bench-nats
             artifact: bench-linux-x86_64
           - name: Windows
             os: windows-latest
             binaries: |
               bench/target/release/bench.exe
-              bench/target/release/oosmem.exe
               bench/target/release/bench-nats.exe
             artifact: bench-windows-x86_64
           - name: macOS
@@ -119,8 +117,8 @@ jobs:
         working-directory: dist
         run: |
           chmod +x bench-linux-x86_64/*
-          tar -czf bench-linux-x86_64.tar.gz -C bench-linux-x86_64 bench oosmem bench-nats
-          (cd bench-windows-x86_64 && zip -q ../bench-windows-x86_64.zip bench.exe oosmem.exe bench-nats.exe)
+          tar -czf bench-linux-x86_64.tar.gz -C bench-linux-x86_64 bench bench-nats
+          (cd bench-windows-x86_64 && zip -q ../bench-windows-x86_64.zip bench.exe bench-nats.exe)
           cp bench-macos-arm64/bench-macos-arm64.zip .
 
       - name: GitHub-Release

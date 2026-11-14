@@ -23,13 +23,15 @@ serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
 thiserror = "2.0.17"
 
-# bench's backend IS a NATS request-reply responder: its tools touch the local
-# filesystem, spawn processes, and reach Postgres. async-nats 0.49 to match
-# the headless services; tokio full for spawn/time/process; futures for the
-# subscription stream.
-async-nats = "0.49"
+# The bench answers its tools over HTTP (src/api.rs): Streamable-HTTP MCP at
+# /mcp and plain POST /call/<operation> for bench-nats. Until 14.11.2026 this
+# was NATS. tokio full for spawn/time/process.
 tokio = { version = "1", features = ["full"] }
-futures = "0.3"
+# Tool surface shared with bench-nats, MCP over HTTP (rmcp's tower service
+# under axum), and the memory store in-process (formerly the oosmem service).
+bench-mcp = { path = "crates/bench-mcp" }
+rmcp = { version = "1.7", features = ["server", "transport-streamable-http-server"] }
+oosmem = { path = "crates/oosmem" }
 
 # ISO-8601 timestamps in fs results (mtime) and the window's time column.
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
@@ -58,13 +60,13 @@ argon2 = "0.5"
 data-encoding = "2"
 anyhow = "1"
 
-# Workspace: die Bench (dieses Paket) plus die beiden Dienste, die mit ihr
-# ausgeliefert werden. oosmem bleibt ein eigener Prozess (die Bench startet
-# und überwacht ihn), bench-nats ist die MCP-Brücke, die Claude startet.
-# Beide kamen am 14.11.2026 mit Historie aus onisin (services/*).
+# Workspace: die Bench (dieses Paket), oosmem (Gedächtnis, als Bibliothek in
+# der Bench), bench-mcp (die MCP-Werkzeuge, von Bench und Brücke geteilt) und
+# bench-nats (stdio-Brücke für Claude Desktop). oosmem und bench-nats kamen am
+# 14.11.2026 mit Historie aus onisin (services/*).
 [workspace]
 resolver = "2"
-members = [".", "crates/oosmem", "crates/bench-nats"]
+members = [".", "crates/oosmem", "crates/bench-mcp", "crates/bench-nats"]
 
 [workspace.package]
 edition = "2021"
@@ -72,9 +74,7 @@ authors = ["Frank von Schrenk"]
 
 [workspace.dependencies]
 anyhow = "1"
-async-nats = "0.49"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
-futures = "0.3"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"

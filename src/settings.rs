@@ -11,12 +11,6 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct NatsServer {
-    pub name: String,
-    pub url: String,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AllowedRoot {
     pub path: String,
 }
@@ -24,10 +18,22 @@ pub struct AllowedRoot {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct BenchSettings {
-    /// Human-readable name for this instance, e.g. "macos". Empty = no
-    /// instance-targeted subscription, only the shared bench.> queue.
+    /// Human-readable name for this instance, e.g. "macos". Shown in the
+    /// window and in /health; bench-nats picks instances by its own targets.
     pub instance_name: String,
-    pub servers: Vec<NatsServer>,
+    /// Port of the tool interface (/mcp, /call/<operation>, /health).
+    pub api_port: u16,
+    /// false = only this machine (127.0.0.1); true = all interfaces, e.g. for a
+    /// test machine Claude reaches through bench-nats on the Mac. The bearer
+    /// token is required either way.
+    pub api_network: bool,
+    /// Folder of the memory store (oosmem). Empty = <data dir>/oosmem, the
+    /// folder the former oosmem service used, so the existing store is kept.
+    pub memory_dir: String,
+    /// Ollama URL for episode summaries. Empty = summaries off.
+    pub llm_url: String,
+    /// Ollama model for episode summaries.
+    pub llm_model: String,
     pub roots: Vec<AllowedRoot>,
     pub otlp_port: u16,
     /// Host-only PostgreSQL DSN, no dbname segment. bench appends "/<appDatabase>"
@@ -48,7 +54,11 @@ impl Default for BenchSettings {
     fn default() -> Self {
         Self {
             instance_name: String::new(),
-            servers: Vec::new(),
+            api_port: 4320,
+            api_network: false,
+            memory_dir: String::new(),
+            llm_url: "http://127.0.0.1:11434".into(),
+            llm_model: default_llm_model().into(),
             roots: Vec::new(),
             otlp_port: 4318,
             dsn: String::new(),
@@ -56,6 +66,24 @@ impl Default for BenchSettings {
             iam_issuer: String::new(),
         }
     }
+}
+
+/// MLX models only run on Apple silicon; elsewhere the plain Ollama build.
+fn default_llm_model() -> &'static str {
+    if cfg!(target_os = "macos") {
+        oosmem::DEFAULT_LLM_MODEL
+    } else {
+        "gemma4:e4b"
+    }
+}
+
+/// Folder of the memory store: the setting, else <platform data dir>/oosmem.
+pub fn memory_dir(s: &BenchSettings) -> std::path::PathBuf {
+    let dir = s.memory_dir.trim();
+    if !dir.is_empty() {
+        return std::path::PathBuf::from(dir);
+    }
+    dirs::data_dir().unwrap_or_else(|| std::path::PathBuf::from(".")).join("oosmem")
 }
 
 /// Load settings from settings.json, falling back to defaults when the file or

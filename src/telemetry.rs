@@ -1,11 +1,7 @@
 //! Wire + IPC data shapes for the observability surface.
 //
-// These three structs cross two boundaries, so their field names are the
-// contract: ToolEvent is published on oos.bench.debug as JSON (consumed by the
-// window and by bench-nats), and all three are emitted to the window over the
-// Tauri event bus. The camelCase rename keeps the JSON byte-compatible with the
-// shapes the old Bun bench produced, so a mixed fleet (one box still on Bun,
-// one on Tauri) interoperates on the same subjects.
+// ToolEvent is also stored as JSON in the audit log (events.db); the camelCase
+// rename keeps it byte-compatible with what the Bun/Tauri benches wrote.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -43,8 +39,8 @@ pub struct LogRecord {
     pub fields: Option<Map<String, Value>>,
 }
 
-/// Connection status for one configured NATS server, pushed to the window so
-/// the status surface can show which servers are reachable.
+/// Status of one local service (tool interface, memory store), pushed to the
+/// window so the side bar can show what is running. `url` is the hover text.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ServerStatus {
     pub name: String,
