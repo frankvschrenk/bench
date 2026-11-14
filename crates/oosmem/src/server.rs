@@ -420,11 +420,11 @@ pub async fn run(cfg: ServerConfig) -> anyhow::Result<()> {
     // consume it so we do not snapshot the instant we boot.
     let mut interval = tokio::time::interval(cfg.snapshot_every);
     interval.tick().await;
-    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+    let mut terminate = Terminate::new()?;
     loop {
         tokio::select! {
             _ = tokio::signal::ctrl_c() => break,
-            _ = sigterm.recv() => break,
+            _ = terminate.recv() => break,
             _ = interval.tick() => {
                 if let Err(e) = store.lock().unwrap().snapshot() {
                     eprintln!("oosmem: snapshot failed: {e}");
@@ -459,4 +459,42 @@ fn spawn_responder(
             }
         }
     });
+}
+
+/// Shutdown request besides Ctrl-C: SIGTERM on Unix (launchd, kill), on
+/// Windows Ctrl-Break / console close / shutdown (taskkill, Windows logging off).
+#[cfg(unix)]
+struct Terminate(tokio::signal::unix::Signal);
+
+#[cfg(unix)]
+impl Terminate {
+    fn new() -> std::io::Result<Self> {
+        use tokio::signal::unix::{signal, SignalKind};
+        Ok(Self(signal(SignalKind::terminate())?))
+    }
+    async fn recv(&mut self) {
+        self.0.recv().await;
+    }
+}
+
+#[cfg(windows)]
+struct Terminate {
+    brk: tokio::signal::windows::CtrlBreak,
+    close: tokio::signal::windows::CtrlClose,
+    shutdown: tokio::signal::windows::CtrlShutdown,
+}
+
+#[cfg(windows)]
+impl Terminate {
+    fn new() -> std::io::Result<Self> {
+        use tokio::signal::windows;
+        Ok(Self { brk: windows::ctrl_break()?, close: windows::ctrl_close()?, shutdown: windows::ctrl_shutdown()? })
+    }
+    async fn recv(&mut self) {
+        tokio::select! {
+            _ = self.brk.recv() => {}
+            _ = self.close.recv() => {}
+            _ = self.shutdown.recv() => {}
+        }
+    }
 }
