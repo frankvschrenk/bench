@@ -4,7 +4,7 @@ version = "0.1.0"
 edition.workspace = true
 authors.workspace = true
 # oosmem carries the BSL-1.1 of onisin (it is domain logic, unlike the
-# generic bench-nats bridge which stays Apache-2.0).
+# generic bench-mcp bridge which stays Apache-2.0).
 
 # Library only: the bench opens the store in-process (see src/lib.rs).
 [lib]

@@ -19,12 +19,12 @@ pub struct AllowedRoot {
 #[serde(rename_all = "camelCase", default)]
 pub struct BenchSettings {
     /// Human-readable name for this instance, e.g. "macos". Shown in the
-    /// window and in /health; bench-nats picks instances by its own targets.
+    /// window and in /health; bench-mcp picks instances by its own targets.
     pub instance_name: String,
     /// Port of the tool interface (/mcp, /call/<operation>, /health).
     pub api_port: u16,
     /// false = only this machine (127.0.0.1); true = all interfaces, e.g. for a
-    /// test machine Claude reaches through bench-nats on the Mac. The bearer
+    /// test machine Claude reaches through bench-mcp on the Mac. The bearer
     /// token is required either way.
     pub api_network: bool,
     /// Folder of the memory store (oosmem). Empty = <data dir>/oosmem, the

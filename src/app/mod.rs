@@ -193,7 +193,7 @@ impl eframe::App for BenchApp {
             let unread_errors = u32::from(self.logs.has_errors() && self.page != PAGE_LOGS);
             let r = Header::new()
                 .menu(&mut self.menu_open)
-                .product("Onisin OS", "Bench")
+                .product("", "Bench")
                 .actions(&[(Icon::Notification, "Logs mit Fehlern")])
                 .badge(0, unread_errors)
                 .show(ui);

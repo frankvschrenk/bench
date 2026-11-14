@@ -3,12 +3,12 @@
 //   GET  /health              → {ok, service, version, instance, memory}   (no token)
 //   POST /call/<operation>    → the tool's JSON reply; 404 for an unknown one
 //   *    /mcp                 → MCP over Streamable HTTP (list_operations,
-//                               set_target, send_message – crate bench-mcp)
+//                               set_target, send_message – crate bench-tools)
 //
 // /call and /mcp need `Authorization: Bearer <token>`; the token lives in the
 // data folder (api-token) and is created on first start. That matters even
 // on 127.0.0.1: exec and fs are powerful, and any local web page could post
-// to localhost. bench-nats (stdio bridge for Claude Desktop) reads the same
+// to localhost. bench-mcp (stdio bridge for Claude Desktop) reads the same
 // file on this machine; other machines get the token in their targets.json.
 
 use std::path::Path;
@@ -21,7 +21,7 @@ use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use bench_mcp::{BenchMcp, BoxFuture, Forward};
+use bench_tools::{BenchMcp, BoxFuture, Forward};
 use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
 use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, StreamableHttpService};
 use serde_json::{json, Value};
@@ -204,7 +204,7 @@ fn same(a: &[u8], b: &[u8]) -> bool {
     a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
-/// /mcp answers in-process; other instances are reached through bench-nats.
+/// /mcp answers in-process; other instances are reached through bench-mcp.
 struct LocalForward(Arc<Api>);
 
 impl LocalForward {
@@ -215,7 +215,7 @@ impl LocalForward {
             Ok(())
         } else {
             Err(format!(
-                "this endpoint is the bench \"{me}\"; reach \"{target}\" through bench-nats (~/.config/bench-nats/targets.json) or its own /mcp"
+                "this endpoint is the bench \"{me}\"; reach \"{target}\" through bench-mcp (~/.config/bench-mcp/targets.json) or its own /mcp"
             ))
         }
     }

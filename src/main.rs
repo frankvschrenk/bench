@@ -1,7 +1,7 @@
 //! bench desktop app (egui + carbon-egui).
 //
 // bench's backend answers tool calls (MCP over HTTP at /mcp, POST /call for
-// the bench-nats bridge). Its tools touch the local filesystem, spawn
+// the bench-mcp bridge). Its tools touch the local filesystem, spawn
 // processes, reach Postgres and the in-process memory store (oosmem), so the
 // interface boots with the app and answers bench.* for the app's lifetime; the
 // window is a status surface fed over a channel, not the data path.
@@ -29,7 +29,7 @@ mod tools;
 
 use std::path::PathBuf;
 
-const TITLE: &str = "Onisin OS - Bench";
+const TITLE: &str = "Bench";
 
 /// Home directory as a string ("" if unknown). Replaces $HOME, which Windows
 /// does not set.
