@@ -4,7 +4,7 @@
 // through the allowed-root sandbox first. Handlers are synchronous std::fs and
 // run on a blocking thread (see [`handle`]) so they never stall the async
 // dispatcher loop. The returned JSON shapes match the Bun originals so callers
-// (and bench-nats) see no difference.
+// (and bench-mcp) see no difference.
 
 use std::cmp::Ordering;
 use std::io::Write;

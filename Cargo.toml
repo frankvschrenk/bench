@@ -24,12 +24,12 @@ serde_json = "1.0.145"
 thiserror = "2.0.17"
 
 # The bench answers its tools over HTTP (src/api.rs): Streamable-HTTP MCP at
-# /mcp and plain POST /call/<operation> for bench-nats. Until 14.11.2026 this
+# /mcp and plain POST /call/<operation> for the bench-mcp bridge. Until 14.11.2026 this
 # was NATS. tokio full for spawn/time/process.
 tokio = { version = "1", features = ["full"] }
-# Tool surface shared with bench-nats, MCP over HTTP (rmcp's tower service
+# Tool surface shared with the bench-mcp bridge, MCP over HTTP (rmcp's tower service
 # under axum), and the memory store in-process (formerly the oosmem service).
-bench-mcp = { path = "crates/bench-mcp" }
+bench-tools = { path = "crates/bench-tools" }
 rmcp = { version = "1.7", features = ["server", "transport-streamable-http-server"] }
 oosmem = { path = "crates/oosmem" }
 
@@ -61,12 +61,12 @@ data-encoding = "2"
 anyhow = "1"
 
 # Workspace: die Bench (dieses Paket), oosmem (Gedächtnis, als Bibliothek in
-# der Bench), bench-mcp (die MCP-Werkzeuge, von Bench und Brücke geteilt) und
-# bench-nats (stdio-Brücke für Claude Desktop). oosmem und bench-nats kamen am
-# 14.11.2026 mit Historie aus onisin (services/*).
+# der Bench), bench-tools (die MCP-Werkzeuge, von Bench und Brücke geteilt) und
+# bench-mcp (stdio-Brücke für Claude Desktop, bis 14.11.2026 „bench-nats“).
+# oosmem und die Brücke kamen am 14.11.2026 mit Historie aus onisin (services/*).
 [workspace]
 resolver = "2"
-members = [".", "crates/oosmem", "crates/bench-mcp", "crates/bench-nats"]
+members = [".", "crates/oosmem", "crates/bench-tools", "crates/bench-mcp"]
 
 [workspace.package]
 edition = "2021"

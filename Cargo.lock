@@ -498,7 +498,7 @@ dependencies = [
  "anyhow",
  "argon2",
  "axum",
- "bench-mcp",
+ "bench-tools",
  "carbon-egui",
  "chrono",
  "data-encoding",
@@ -524,25 +524,25 @@ dependencies = [
 
 [[package]]
 name = "bench-mcp"
-version = "0.2.0"
-dependencies = [
- "rmcp",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "bench-nats"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
- "bench-mcp",
+ "bench-tools",
  "dirs",
  "reqwest",
  "rmcp",
  "serde",
  "serde_json",
  "tokio",
+]
+
+[[package]]
+name = "bench-tools"
+version = "0.2.0"
+dependencies = [
+ "rmcp",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

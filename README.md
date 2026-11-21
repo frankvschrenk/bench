@@ -19,7 +19,7 @@ Die Bench lauscht auf `127.0.0.1:4320` (Einstellungen → Schnittstelle; Port un
 | Pfad | Zweck | Token |
 |---|---|---|
 | `/mcp` | MCP über Streamable HTTP: `list_operations`, `set_target`, `send_message` | ja |
-| `/call/<operation>` | POST mit JSON-Payload, Antwort = JSON der Operation (für bench-nats) | ja |
+| `/call/<operation>` | POST mit JSON-Payload, Antwort = JSON der Operation (für bench-mcp) | ja |
 | `/health` | `{ok, instance, version, memory}` | nein |
 
 Das Token (`Authorization: Bearer …`) liegt als `api-token` im Datenordner und
@@ -28,10 +28,10 @@ Befehle für Claude Code und Claude Desktop.
 
 - **Claude Code:** `claude mcp add --transport http bench http://127.0.0.1:4320/mcp --header "Authorization: Bearer <token>"`
 - **Claude Desktop** startet lokale Server nur per stdio. Dafür gibt es
-  `bench-nats` (liegt neben der Bench, in der .app unter `Contents/MacOS`):
-  `"bench-nats": { "command": "<pfad>/bench-nats" }`. Es liest Token und
+  `bench-mcp` (liegt neben der Bench, in der .app unter `Contents/MacOS`):
+  `"bench-mcp": { "command": "<pfad>/bench-mcp" }`. Es liest Token und
   Adresse der lokalen Bench selbst; weitere Instanzen trägt man in
-  `~/.config/bench-nats/targets.json` ein:
+  `~/.config/bench-mcp/targets.json` ein:
   `{ "linux": { "url": "http://192.168.8.135:4320", "token": "…" } }`
   (die Bench dort mit „im Netz erreichbar“). `set_target linux` wählt sie aus.
 
@@ -41,10 +41,10 @@ Befehle für Claude Code und Claude Desktop.
 |---|---|---|
 | `.` (bench) | die App | – |
 | `crates/oosmem` | Gedächtnis (Handbuch, Notizen, Suche), als Bibliothek in der Bench | BSL-1.1 |
-| `crates/bench-mcp` | die MCP-Werkzeuge, geteilt von Bench (`/mcp`) und bench-nats | Apache-2.0 |
-| `crates/bench-nats` | stdio-Brücke für Claude Desktop → HTTP | Apache-2.0 |
+| `crates/bench-tools` | die MCP-Werkzeuge, geteilt von Bench (`/mcp`) und bench-mcp | Apache-2.0 |
+| `crates/bench-mcp` | stdio-Brücke für Claude Desktop → HTTP | Apache-2.0 |
 
-oosmem und bench-nats kamen am 14.11.2026 mit Historie aus `onisin/services`.
+oosmem und bench-mcp kamen am 14.11.2026 mit Historie aus `onisin/services`.
 oosmem war bis dahin ein eigener Dienst über NATS; jetzt öffnet die Bench den
 Speicher selbst (Ordner: Einstellungen → Allgemein → Gedächtnis, Standard ist
 der bisherige Ordner, z. B. `~/Library/Application Support/oosmem`). Eine
@@ -63,13 +63,13 @@ Zusammenfassungen (`episode.summarize`) laufen über Ollama; das Standardmodell
 
 ```sh
 cargo run              # Debug
-cargo build --release --workspace  # target/release/{bench,bench-nats}(.exe)
+cargo build --release --workspace  # target/release/{bench,bench-mcp}(.exe)
 cargo test --workspace
-./scripts/bundle-macos.sh   # macOS: target/release/bundle/Onisin OS - Bench.app (mit bench-nats)
+./scripts/bundle-macos.sh   # macOS: target/release/bundle/Bench.app (mit bench-mcp)
 ```
 
 Die .app ist ad-hoc signiert. Installieren: nach `/Applications` kopieren
-(`ditto "target/release/bundle/Onisin OS - Bench.app" "/Applications/Onisin OS - Bench.app"`).
+(`ditto "target/release/bundle/Bench.app" "/Applications/Bench.app"`).
 Sie nutzt denselben Datenordner wie die Tauri-Bench – nicht beide gleichzeitig
 starten (gleiche Ports 4318/5556, gleiches Gedächtnis).
 

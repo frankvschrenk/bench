@@ -2,7 +2,7 @@
 //!
 //! - the bench itself serves it over Streamable HTTP (`/mcp`) and answers
 //!   every call in-process;
-//! - `bench-nats` serves it over stdio for Claude Desktop and forwards each
+//! - `bench-mcp` serves it over stdio for Claude Desktop and forwards each
 //!   call over HTTP to the chosen bench instance.
 //!
 //! Until 14.11.2026 the transport was NATS. Tool names and argument shapes
@@ -27,7 +27,7 @@ pub use operations::manifest_json;
 
 pub type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
 
-/// Where a call goes. The bench answers in-process, bench-nats forwards over HTTP.
+/// Where a call goes. The bench answers in-process, the bench-mcp bridge forwards over HTTP.
 pub trait Forward: Send + Sync + 'static {
     /// Run one bench operation. `target` None = the active target. Ok carries
     /// the bench's JSON reply verbatim (a tool error is `{"error": …}` in
@@ -100,7 +100,7 @@ impl BenchMcp {
     }
 
     #[tool(
-        description = "Set the active bench instance for this session (e.g. \"macos\" or \"linux\", as configured for bench-nats). All subsequent send_message calls go to this instance unless you pass a different target. Pass an empty string \"\" to reset to the default bench."
+        description = "Set the active bench instance for this session (e.g. \"macos\" or \"linux\", as configured in targets.json of bench-mcp). All subsequent send_message calls go to this instance unless you pass a different target. Pass an empty string \"\" to reset to the default bench."
     )]
     async fn set_target(&self, Parameters(args): Parameters<SetTargetArgs>) -> Result<CallToolResult, McpError> {
         let target = args.target.trim().to_string();

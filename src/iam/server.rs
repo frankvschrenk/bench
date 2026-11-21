@@ -349,7 +349,7 @@ struct FormParams {
 
 const FORM_HEAD: &str = r#"<!doctype html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Onisin — Sign in</title>
+<title>Bench — Sign in</title>
 <style>
   body{font-family:system-ui,sans-serif;max-width:360px;margin:4em auto;color:#1a1a1a;padding:0 1em}
   h1{font-size:1.25em;margin-bottom:1em}
@@ -358,7 +358,7 @@ const FORM_HEAD: &str = r#"<!doctype html>
   button{margin-top:1.4em;width:100%;padding:.6em;font-size:1em;border:0;border-radius:6px;background:#1a1a1a;color:#fff;cursor:pointer}
   .err{background:#fdecea;border:1px solid #f5c2c0;color:#9a1c14;padding:.5em .7em;border-radius:6px;font-size:.85em}
 </style></head><body>
-<h1>Sign in to Onisin</h1>
+<h1>Sign in to Bench</h1>
 "#;
 
 fn render_form(p: &FormParams) -> Response {

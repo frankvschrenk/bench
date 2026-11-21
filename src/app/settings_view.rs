@@ -52,7 +52,7 @@ impl GeneralPage {
                     TextInput::new(&mut self.instance_name)
                         .label("Instanzname")
                         .placeholder("macos")
-                        .helper_text("Name dieser Bench (z. B. für set_target und targets.json von bench-nats)."),
+                        .helper_text("Name dieser Bench (z. B. für set_target und targets.json von bench-mcp)."),
                 )
             });
             form.section("Lokale Dienste");
@@ -203,7 +203,8 @@ impl InterfacePage {
         );
         let port = self.port.trim().parse::<u16>().ok().filter(|p| *p >= 1024);
         let mut token = self.token.clone();
-        let mut snippets = claude_snippets(s.api_port, &self.token);
+        // Im Textfeld steht das Token nie im Klartext; „Kopieren“ nimmt es mit.
+        let mut snippets = claude_snippets(s.api_port, "<Token, siehe oben>");
         let mut save = false;
         Form::new().width(FORM_WIDTH).show(ui, |form| {
             form.full(|ui| {
@@ -211,7 +212,7 @@ impl InterfacePage {
                     .label("Port")
                     .placeholder("4320")
                     .width(200.0)
-                    .helper_text("/mcp (MCP über Streamable HTTP), /call/<operation> (für bench-nats), /health.");
+                    .helper_text("/mcp (MCP über Streamable HTTP), /call/<operation> (für bench-mcp), /health.");
                 if port.is_none() {
                     input = input.invalid("Port zwischen 1024 und 65535");
                 }
@@ -228,8 +229,23 @@ impl InterfacePage {
                         .read_only(true)
                         .password(true)
                         .id_salt("api-token")
-                        .helper_text("Bearer-Token für /mcp und /call. Liegt als api-token im Datenordner; bench-nats liest es dort auf diesem Rechner selbst."),
+                        .helper_text("Bearer-Token für /mcp und /call. Liegt als api-token im Datenordner; bench-mcp liest es dort auf diesem Rechner selbst."),
                 )
+            });
+            form.full(|ui| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 8.0;
+                    if ui.add(Button::new("Token kopieren").icon(Icon::Copy).kind(ButtonKind::Tertiary).size(ButtonSize::Small)).clicked() {
+                        ui.ctx().copy_text(self.token.clone());
+                    }
+                    if ui
+                        .add(Button::new("Befehl für Claude Code kopieren").icon(Icon::Copy).kind(ButtonKind::Tertiary).size(ButtonSize::Small))
+                        .clicked()
+                    {
+                        ui.ctx().copy_text(claude_code_command(s.api_port, &self.token));
+                    }
+                })
+                .response
             });
             form.section("Claude einrichten");
             form.full(|ui| {
@@ -250,8 +266,12 @@ impl InterfacePage {
 }
 
 /// Copy-ready setup for Claude Code, Claude Desktop and other machines.
+fn claude_code_command(port: u16, token: &str) -> String {
+    format!("claude mcp add --transport http bench http://127.0.0.1:{port}/mcp --header \"Authorization: Bearer {token}\"")
+}
+
 fn claude_snippets(port: u16, token: &str) -> String {
-    let exe = if cfg!(windows) { "bench-nats.exe" } else { "bench-nats" };
+    let exe = if cfg!(windows) { "bench-mcp.exe" } else { "bench-mcp" };
     let bridge = std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(|d| d.join(exe)))
@@ -262,8 +282,8 @@ fn claude_snippets(port: u16, token: &str) -> String {
         "# Claude Code (MCP direkt über HTTP)\n\
 claude mcp add --transport http bench http://127.0.0.1:{port}/mcp \\\n  --header \"Authorization: Bearer {token}\"\n\n\
 # Claude Desktop: claude_desktop_config.json → mcpServers\n\
-\"bench-nats\": {{ \"command\": {bridge_json} }}\n\n\
-# Andere Rechner für bench-nats: ~/.config/bench-nats/targets.json\n\
+\"bench-mcp\": {{ \"command\": {bridge_json} }}\n\n\
+# Andere Rechner für bench-mcp: ~/.config/bench-mcp/targets.json\n\
 {{ \"linux\": {{ \"url\": \"http://<rechner>:{port}\", \"token\": \"<token jener Bench>\" }} }}\n"
     )
 }
@@ -336,5 +356,5 @@ impl RootsPage {
 
 fn placeholder_root() -> String {
     let sep = std::path::MAIN_SEPARATOR;
-    format!("{}{sep}repro{sep}onisin", crate::home_dir())
+    format!("{}{sep}repro", crate::home_dir())
 }

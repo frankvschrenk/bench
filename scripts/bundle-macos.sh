@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Baut die Bench im Release-Modus und packt sie als macOS-App:
-#   target/release/bundle/Onisin OS - Bench.app
-# bench-nats (stdio-Brücke für Claude Desktop) liegt mit in Contents/MacOS.
+#   target/release/bundle/Bench.app
+# bench-mcp (stdio-Brücke für Claude Desktop) liegt mit in Contents/MacOS.
 # Ad-hoc signiert, damit macOS sie ohne Entwicklerzertifikat startet.
 # Optional: ZIP=1 legt daneben ein zip für Artefakte/Releases an.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
-NAME="Onisin OS - Bench"
+NAME="Bench"
 VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)
 BUNDLE="target/release/bundle/$NAME.app"
 
@@ -15,7 +15,7 @@ cargo build --release --locked --workspace
 
 rm -rf "$BUNDLE"
 mkdir -p "$BUNDLE/Contents/MacOS" "$BUNDLE/Contents/Resources"
-for bin in bench bench-nats; do
+for bin in bench bench-mcp; do
   cp "target/release/$bin" "$BUNDLE/Contents/MacOS/$bin"
 done
 cp assets/icon.icns "$BUNDLE/Contents/Resources/icon.icns"

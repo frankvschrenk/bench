@@ -39,6 +39,7 @@ pub async fn handle(op: &str, args: Value, ctx: &Ctx) -> Option<Result<Value, To
         "set" => set(args, ctx).await,
         "get" => get(args, ctx).await,
         "history" => history(args, ctx).await,
+        "move" => move_repo(args, ctx).await,
         _ => return None,
     };
     Some(result)
@@ -74,6 +75,12 @@ struct RepoArgs {
 const SUMMARY_CHARS: usize = 220;
 /// Notizen neben der Übergabe nur angerissen
 const NOTE_SHORT_CHARS: usize = 240;
+
+#[derive(Deserialize)]
+struct MoveArgs {
+    from: String,
+    to: String,
+}
 
 #[derive(Deserialize)]
 struct HistoryArgs {
@@ -254,6 +261,60 @@ async fn get(args: Value, ctx: &Ctx) -> Result<Value, ToolError> {
         .map(entry_json)
         .collect();
     Ok(json!({ "repo": repo, "entries": entries }))
+}
+
+/// Repo umbenannt/verschoben (Frank 15.11.2026: waki -> ephemerline): die aktuellen
+/// Einträge von `from` werden unter `to` neu geschrieben (jeweils `supersedes` auf den
+/// alten Eintrag, Verlauf bleibt am alten Namen), danach die Aufgaben umgehängt.
+/// Einträge, die es unter `to` schon gibt, bleiben unangetastet.
+async fn move_repo(args: Value, ctx: &Ctx) -> Result<Value, ToolError> {
+    let a: MoveArgs = serde_json::from_value(args)?;
+    let (from, to) = (normalize_repo(&a.from), normalize_repo(&a.to));
+    if from == GLOBAL || to == GLOBAL || from.is_empty() || to.is_empty() || from == to {
+        return Err(ToolError::Msg("handbook_move: from und to sind zwei verschiedene Repo-Pfade (nicht \"*\")".into()));
+    }
+    let evs = events(ctx).await?;
+    let have: Vec<String> = current(&evs, |r| same_repo(r, &to)).into_iter().map(|e| e.key).collect();
+    let mut moved = Vec::new();
+    let mut kept = Vec::new();
+    for e in current(&evs, |r| same_repo(r, &from)) {
+        if have.contains(&e.key) {
+            kept.push(e.key);
+            continue;
+        }
+        memory::request(
+            ctx,
+            memory::SUBJECT_APPEND,
+            json!({
+                "stream_id": HANDBOOK_STREAM,
+                "content": e.text,
+                "topic": format!("{to}|{}", e.key),
+                "trace": "space",
+                "refs": [{ "target_event_id": e.id, "kind": REF_SUPERSEDES }],
+            }),
+            "handbook_move",
+        )
+        .await?;
+        moved.push(e.key);
+    }
+    // Aufgaben: alle Schreibweisen des alten Pfads (voll, ~/, kurzer Name)
+    let tasks = match crate::tools::task::open_db(ctx, "handbook_move").await {
+        Ok(pool) => {
+            let rows = sqlx::query("SELECT id, repo FROM task WHERE repo IS NOT NULL").fetch_all(&pool).await?;
+            let mut n = 0u64;
+            for r in rows {
+                let id: i64 = r.try_get("id")?;
+                let repo: String = r.try_get("repo")?;
+                if same_repo(&normalize_repo(&repo), &from) {
+                    sqlx::query("UPDATE task SET repo = $1 WHERE id = $2").bind(&to).bind(id).execute(&pool).await?;
+                    n += 1;
+                }
+            }
+            json!(n)
+        }
+        Err(e) => json!({ "error": e.to_string() }),
+    };
+    Ok(json!({ "from": from, "to": to, "moved": moved, "kept": kept, "tasks": tasks }))
 }
 
 async fn history(args: Value, ctx: &Ctx) -> Result<Value, ToolError> {

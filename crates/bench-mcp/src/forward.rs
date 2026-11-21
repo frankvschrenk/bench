@@ -1,6 +1,6 @@
 //! Forwarding tool calls to a bench over HTTP.
 //
-// Targets: ~/.config/bench-nats/targets.json maps instance names to a bench:
+// Targets: ~/.config/bench-mcp/targets.json maps instance names to a bench:
 //
 //   { "macos": { "url": "http://127.0.0.1:4320" },
 //     "linux": { "url": "http://192.168.8.135:4320", "token": "…" } }
@@ -8,13 +8,13 @@
 // Without a token the local bench's token file is used (same user, same
 // machine). The empty target "" is the local bench: BENCH_URL (default
 // http://127.0.0.1:4320) with BENCH_TOKEN or the token file. The active
-// target persists in ~/.config/bench-nats/session.json as before, so a
-// rebuilt binary keeps the choice.
+// target persists in ~/.config/bench-mcp/session.json. Files still in the old
+// ~/.config/bench-nats (name until 14.11.2026) are read as a fallback.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use bench_mcp::{reply_timeout, BoxFuture, Forward};
+use bench_tools::{reply_timeout, BoxFuture, Forward};
 use serde::Deserialize;
 
 const DEFAULT_URL: &str = "http://127.0.0.1:4320";
@@ -37,9 +37,17 @@ impl HttpForward {
 }
 
 fn config_dir() -> PathBuf {
-    // Deliberately ~/.config on every platform (not Application Support), as
-    // before: the session file stays where the old binary wrote it.
-    dirs::home_dir().unwrap_or_default().join(".config").join("bench-nats")
+    // Deliberately ~/.config on every platform (not Application Support).
+    dirs::home_dir().unwrap_or_default().join(".config").join("bench-mcp")
+}
+
+/// A config file, falling back to the old ~/.config/bench-nats.
+async fn read_config(name: &str) -> Option<Vec<u8>> {
+    if let Ok(b) = tokio::fs::read(config_dir().join(name)).await {
+        return Some(b);
+    }
+    let old = dirs::home_dir()?.join(".config").join("bench-nats").join(name);
+    tokio::fs::read(old).await.ok()
 }
 
 /// Token of the bench on this machine: BENCH_TOKEN, else the bench's token
@@ -55,20 +63,19 @@ fn local_token() -> Option<String> {
 }
 
 async fn load_targets() -> BTreeMap<String, Target> {
-    tokio::fs::read(config_dir().join("targets.json"))
+    read_config("targets.json")
         .await
-        .ok()
         .and_then(|b| serde_json::from_slice(&b).ok())
         .unwrap_or_default()
 }
 
 async fn load_active() -> String {
-    match tokio::fs::read_to_string(config_dir().join("session.json")).await {
-        Ok(text) => serde_json::from_str::<serde_json::Value>(&text)
+    match read_config("session.json").await {
+        Some(bytes) => serde_json::from_slice::<serde_json::Value>(&bytes)
             .ok()
             .and_then(|v| v.get("target").and_then(|t| t.as_str()).map(str::to_string))
             .unwrap_or_default(),
-        Err(_) => std::env::var("BENCH_DEFAULT_TARGET").unwrap_or_default(),
+        None => std::env::var("BENCH_DEFAULT_TARGET").unwrap_or_default(),
     }
 }
 

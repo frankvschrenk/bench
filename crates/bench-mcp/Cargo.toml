@@ -1,14 +1,25 @@
 [package]
 name = "bench-mcp"
-version = "0.2.0"
+version = "0.3.0"
 edition.workspace = true
 authors.workspace = true
-description = "MCP tools of the bench (list_operations, set_target, send_message), shared by the bench's own HTTP endpoint and the bench-nats stdio bridge"
-# Like bench-nats (generic bridge, no domain logic): Apache-2.0.
+# bench-mcp is a generic MCP bridge with no domain logic: Apache-2.0, separate
+# from the BSL-1.1 of oosmem. Until 14.11.2026 it was called bench-nats and
+# spoke NATS; now it forwards over HTTP to the bench.
 license = "Apache-2.0"
-publish = false
+
+[[bin]]
+name = "bench-mcp"
+path = "src/main.rs"
 
 [dependencies]
+anyhow = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-rmcp = { version = "1.7", features = ["server", "macros"] }
+tokio = { workspace = true }
+reqwest = { workspace = true }
+bench-tools = { path = "../bench-tools" }
+# stdio transport for Claude Desktop, which starts us as a child process.
+rmcp = { version = "1.7", features = ["server", "transport-io"] }
+# Home and data folder on every platform (USERPROFILE/APPDATA on Windows).
+dirs = "6"

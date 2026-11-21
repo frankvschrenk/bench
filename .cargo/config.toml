@@ -1,0 +1,4 @@
+# Windows: C-Laufzeit (vcruntime140.dll) fest einbauen, damit bench.exe und bench-mcp.exe auf einem
+# frischen Windows ohne „Visual C++ Redistributable“ starten (Frank, X1, 21.11.2026).
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

@@ -1,4 +1,4 @@
-# Baut die Bench (mit oosmem im Prozess) und die Brücke bench-nats unter Linux,
+# Baut die Bench (mit oosmem im Prozess) und die Brücke bench-mcp unter Linux,
 # Windows und macOS (als .app), legt die Programme als Artefakte ab und hängt
 # sie bei einem Tag v* an ein GitHub-Release.
 #
@@ -34,13 +34,13 @@ jobs:
             os: ubuntu-24.04
             binaries: |
               bench/target/release/bench
-              bench/target/release/bench-nats
+              bench/target/release/bench-mcp
             artifact: bench-linux-x86_64
           - name: Windows
             os: windows-latest
             binaries: |
               bench/target/release/bench.exe
-              bench/target/release/bench-nats.exe
+              bench/target/release/bench-mcp.exe
             artifact: bench-windows-x86_64
           - name: macOS
             os: macos-latest
@@ -117,8 +117,8 @@ jobs:
         working-directory: dist
         run: |
           chmod +x bench-linux-x86_64/*
-          tar -czf bench-linux-x86_64.tar.gz -C bench-linux-x86_64 bench bench-nats
-          (cd bench-windows-x86_64 && zip -q ../bench-windows-x86_64.zip bench.exe bench-nats.exe)
+          tar -czf bench-linux-x86_64.tar.gz -C bench-linux-x86_64 bench bench-mcp
+          (cd bench-windows-x86_64 && zip -q ../bench-windows-x86_64.zip bench.exe bench-mcp.exe)
           cp bench-macos-arm64/bench-macos-arm64.zip .
 
       - name: GitHub-Release

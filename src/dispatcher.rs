@@ -1,6 +1,6 @@
 //! Tool dispatcher — the bench's reason for existing.
 //
-// Every call (from /mcp, from bench-nats via POST /call/<operation>) lands in
+// Every call (from /mcp, from bench-mcp via POST /call/<operation>) lands in
 // `call`: route to the tool handler, render the reply as JSON, and emit
 // telemetry (a ToolEvent for the window's live feed and a bench_events row
 // for the audit log). Unknown operations only get the error reply — no
